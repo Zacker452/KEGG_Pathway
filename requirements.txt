@@ -1,6 +1,6 @@
 # Povinné
 rdkit>=2023.9
-matplotlib>=3.7
+matplotlib>=3.7      # nainstaluje i numpy a Pillow (potřebné pro náhled v okně)
 
 # Volitelné – export do PDF/PNG, když není nainstalovaný nástroj rsvg-convert
 # cairosvg>=2.7

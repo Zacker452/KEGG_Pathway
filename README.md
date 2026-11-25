@@ -28,6 +28,10 @@ choosing which metabolites and reactions to draw; hidden intermediates are repla
   nebo volitelně jako plné atomové vzorce.
 - **Rozložení bez křížení:** vrstvový (Sugiyamův) algoritmus s minimalizací křížení,
   pravoúhlé šipky, každá s vlastní svislou „kolejí“, a popisky enzymů s kontrolou kolizí.
+- **Kruhové rozložení pro cyklické dráhy** (citrátový cyklus, močovinový cyklus …):
+  program cyklus sám najde a nakreslí ho po kružnici, ostatní větve vedou paprskovitě ven.
+  Po načtení dráhy upozorní, že cyklus obsahuje.
+- **Náhled přímo v okně** se zvětšováním a posouváním, bez ukládání souboru.
 - **Správný směr šipek:** nevratné reakce mají plný hrot (→), vratné dvojici polovičních (⇌).
   Reakce bez známého enzymu jsou čárkovaně.
 - **Enzymy:** u šipek jsou EC čísla a názvy genů organismu z KGML (např. kuře `gga`, člověk `hsa`).
@@ -78,7 +82,9 @@ python kegg_draha_svg.py
    Ctrl/Shift + klik označí více řádků, mezerník je pak přepne najednou.
 3. Karta **Reakce** – vypnutá reakce se nekreslí. **Otočit směr označených**
    obrátí šipku (KGML občas uvádí nevratnou reakci obráceně).
-4. Vpravo nastav vzhled a klikni na **Vytvořit SVG…**.
+4. Vpravo nastav vzhled. Tlačítko **Náhled** vykreslí obrázek na kartu Náhled (zvětšení
+   „přizpůsobit šířce“ až 200 %, posun tažením myší). Když se ti líbí, ulož ho tlačítkem
+   **Vytvořit SVG…**.
 
 ### Příkazová řádka
 
@@ -86,6 +92,7 @@ python kegg_draha_svg.py
 python kegg_draha_svg.py gga00360.xml                       # celá dráha -> gga00360_draha.svg
 python kegg_draha_svg.py gga00360.xml --vynechat C00601,C07086 --pdf
 python kegg_draha_svg.py hsa00010.xml --jen-organismus --zvyraznit
+python kegg_draha_svg.py hsa00020.xml --kruh                # citrátový cyklus do kruhu
 python kegg_draha_svg.py --podporovane                      # které dráhy program umí
 python kegg_draha_svg.py --help                             # všechny volby
 ```
@@ -96,6 +103,7 @@ python kegg_draha_svg.py --help                             # všechny volby
 |---|---|---|
 | Výchozí metabolit | `--start C00079` | látka úplně vlevo, od ní se dráha rozkládá |
 | Název pod / vedle struktury | `--popisky pod\|vpravo` | umístění názvu metabolitu |
+| Rozložení: řádkové / kruhové (cyklus) | `--kruh` | kruhové = nejdelší cyklus po kružnici, větve ven |
 | navazující dráhy | `--bez-odkazu` | rámečky s odkazy na další dráhy KEGG |
 | názvy genů organismu | `--bez-genu` | geny z KGML u šipek |
 | zvýraznit enzymy organismu zeleně | `--zvyraznit` | jako zelené boxy v KEGG |
@@ -106,6 +114,7 @@ python kegg_draha_svg.py --help                             # všechny volby
 | Velikost písma atomů | `--velikost-atomu 0.5` | relativní velikost symbolů C, O, N … |
 | Vlastní nadpis | `--nadpis "…"` | jinak se použije název dráhy |
 | Jen reakce organismu | `--jen-organismus` | jen reakce, pro které má organismus gen |
+| Náhled (karta Náhled) | – | vykreslí obrázek v okně, nic neukládá |
 | navíc PDF | `--pdf`, `--png`, `--emf` | další formáty |
 | stahovat z KEGG | `--offline` (vypne) | bez internetu se použije jen mezipaměť |
 
@@ -119,12 +128,14 @@ Další konstanty vzhledu (barvy, mezery, písmo, poloměr rohů šipek) jsou na
 | Metabolické dráhy **00xxx** (glykolýza 00010, citrátový cyklus 00020, puriny 00230, aminokyseliny …) | ✔ |
 | Libovolný organismus (`gga`, `hsa`, `mmu`, `eco` …) i referenční mapy (`map`, `ko`) | ✔ |
 | Glykanové dráhy (00510, 00604 …) – symboly SNFG | ✔ |
+| Cyklické dráhy (00020 citrátový cyklus, močovinový cyklus …) – kruhové rozložení | ✔ |
 | Signální a regulační dráhy **04xxx**, dráhy nemocí **05xxx** | ✘ – v KGML nejsou reakce mezi látkami, jen vztahy proteinů (program to oznámí) |
 | Přehledové mapy **01100, 01200** … | ✘ – příliš velké, bez popsaných reakcí |
 
 **Na co si dát pozor**
 
-- Cyklické dráhy (citrátový cyklus) se kreslí zleva doprava jako řada s šipkou zpět, ne jako kruh.
+- Kruhové rozložení bere nejdelší cyklus ve vybrané části dráhy. Pokud chceš jiný cyklus,
+  vypni látky, které do něj nepatří (nahradí je rámeček „vynechané kroky“).
 - Látky bez struktury v KEGG (protein, akceptor, polymery) mají jen rámeček s názvem.
 - Uzlové metabolity (pyruvát, acetyl-CoA), které KEGG kreslí na více místech, jsou v obrázku
   jednou. Vede z nich proto víc šipek.
@@ -142,11 +153,14 @@ Další konstanty vzhledu (barvy, mezery, písmo, poloměr rohů šipek) jsou na
    = jedna šipka). Skryté látky mezi vybranými se nahradí rámečkem „vynechané kroky“.
 3. **Rozložení.** Vrstvy podle vzdálenosti od výchozí látky, pomocné uzly pro dlouhé hrany,
    barycentrická metoda s výměnami sousedů (minimalizace křížení) a svislé polohy
-   izotonickou regresí (PAV).
+   izotonickou regresí (PAV). Kruhové rozložení: nejdelší orientovaný cyklus (prohledávání
+   do hloubky) po kružnici, šipky po obvodu jako oblouky (Bézierovy křivky), větve jako
+   strom do výsečí kolem kružnice.
 4. **Šipky.** Pravoúhlé vedení, pořadí svislých kolejí v každé mezeře optimalizované
    proti křížení, popisky s kontrolou kolizí.
 5. **Výstup.** Struktury z RDKit (text atomů jako křivky), ostatní text převedený na obrysy
-   přes matplotlib `TextPath`. V SVG není žádný `<text>`.
+   přes matplotlib `TextPath`. V SVG není žádný `<text>`. Náhled v okně vykresluje stejné
+   SVG přes matplotlib (Agg), takže nepotřebuje žádnou další knihovnu.
 
 ## Data KEGG a licence
 
