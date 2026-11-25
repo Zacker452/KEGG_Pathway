@@ -1,0 +1,63 @@
+# Sestaví Windows aplikaci KEGG_Pathway.exe (PyInstaller) a ověří, že funguje.
+# - při každé změně v main a u pull requestů: .exe ke stažení v záložce Actions (Artifacts)
+# - při vytvoření tagu v* (např. v1.0): .exe se přiloží k vydání (Releases)
+name: Sestavit Windows .exe
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalace závislostí
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Sestavení .exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name KEGG_Pathway
+          --icon assets/ikona.ico
+          --add-data "assets/ikona.ico;assets"
+          --collect-all rdkit
+          --hidden-import PIL.ImageTk
+          kegg_draha_svg.py
+
+      - name: Zkouška – vykreslit dráhu 00360 z hotového .exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\KEGG_Pathway.exe `
+               -ArgumentList '00360','--offline','-o','test_00360.svg' -Wait -PassThru
+          if (-not (Test-Path test_00360.svg)) { throw "SVG nevzniklo (návratový kód $($p.ExitCode))" }
+          $velikost = (Get-Item test_00360.svg).Length
+          if ($velikost -lt 100000) { throw "SVG je podezřele malé: $velikost B" }
+          Write-Host "OK – SVG má $velikost B"
+          Get-Item dist\KEGG_Pathway.exe | Format-List Name, Length
+
+      - name: Nahrát .exe (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KEGG_Pathway-windows
+          path: dist/KEGG_Pathway.exe
+          retention-days: 90
+
+      - name: Přiložit k vydání (jen u tagu v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/KEGG_Pathway.exe

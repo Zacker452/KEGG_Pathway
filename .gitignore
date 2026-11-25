@@ -18,3 +18,11 @@ venv/
 # IDE
 .idea/
 .vscode/
+
+# Uložené nastavení vzhledu (osobní)
+nastaveni_vzhledu.json
+
+# PyInstaller
+build/
+dist/
+*.spec
