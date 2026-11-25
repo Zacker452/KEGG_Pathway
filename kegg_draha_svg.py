@@ -266,6 +266,43 @@ def pole_zaznamu(zaznam, klic):
 # =============================================================================
 # 3) NAČTENÍ DRÁHY
 # =============================================================================
+# Přenašeče a kofaktory: v obrázku se ve výchozím stavu nekreslí (KEGG je u některých
+# drah, např. citrátového cyklu, uvádí jako samostatné látky).
+PRENASECE = {
+    "C00068",                       # thiamindifosfát (ThPP)
+    "C15972", "C15973",             # enzym-N6-(lipoyl)lysin, enzym-N6-(dihydrolipoyl)lysin
+    "C00248", "C00579",             # lipoamid, dihydrolipoamid
+    "C00229",                       # acyl-carrier protein (ACP)
+    "C00010", "C00003", "C00004", "C00005", "C00006", "C00016", "C01352",   # CoA, NAD(P)(H), FAD(H2)
+    "C00002", "C00008", "C00020", "C00009", "C00013",                       # ATP, ADP, AMP, Pi, PPi
+    "C00001", "C00011", "C00007", "C00080", "C00014",                       # H2O, CO2, O2, H+, NH3
+    "C00138", "C00139", "C00342", "C00343",                                 # ferredoxin, thioredoxin
+}
+RE_PRENASEC = re.compile(
+    r"^(thiamine? diphosphate|enzyme n6-\((dihydro)?lipoyl\)lysine|(dihydro)?lipoamide(-e)?|"
+    r"acyl-carrier protein|(reduced |oxidized )?(ferredoxin|thioredoxin|glutaredoxin|flavodoxin))$",
+    re.I)
+# Meziprodukty vázané na enzymový komplex (PDH, OGDH, syntáza mastných kyselin …):
+# když jsou vypnuté, jejich řetězec se sloučí do jedné běžné šipky.
+RE_VAZANY = re.compile(r"thiamin|thpp|lipoyl|lipoamide|^\[|^enzyme |carrier protein|\[acp\]|-acp\b", re.I)
+
+
+VAZANE = {
+    "C05125", "C05381",             # 2-(α-hydroxyethyl)-ThPP, 3-karboxy-1-hydroxypropyl-ThPP
+    "C16254", "C16255",             # S-acetyl- a S-sukcinyldihydrolipoyllysin (E2 PDH / OGDH)
+    "C15974", "C16239", "C16240",   # 3-methyl-1-hydroxybutyl-ThPP, S-acyldihydrolipoamidy (BCKDH)
+}
+
+
+def role_latky(c, nazev_en):
+    """'prenasec' (ThPP, lipoyllysin, NAD …), 'vazany' (meziprodukt na enzymu) nebo 'normal'."""
+    if c in PRENASECE or RE_PRENASEC.match(nazev_en or ""):
+        return "prenasec"
+    if c in VAZANE or RE_VAZANY.search(nazev_en or ""):
+        return "vazany"
+    return "normal"
+
+
 class Draha:
     """Načtená dráha: metabolity, reakce (dvojice látek), odkazy na další mapy."""
 
@@ -410,8 +447,9 @@ def nacti_drahu(cesta, online=True, log=print):
     for c in cids:
         zaz = zaznamy.get(c, "")
         nazev = CESKE_NAZVY.get(c)
+        nazev_en = pole_zaznamu(zaz, "NAME").split("\n")[0].strip().rstrip(";")
         if not nazev:
-            n = pole_zaznamu(zaz, "NAME").split("\n")[0].strip().rstrip(";")
+            n = nazev_en
             if not n and c.startswith("G"):                 # glykan bez názvu -> složení
                 n = pole_zaznamu(zaz, "COMPOSITION").strip()
             nazev = n or c
@@ -421,7 +459,8 @@ def nacti_drahu(cesta, online=True, log=print):
         else:
             zdroj = SMILES.get(c) or kegg_get(f"get/{c}/mol", online)
         d.metabolity[c] = dict(nazev=nazev, zdroj=zdroj, poradi=souradnice.get(c, (9e9, 9e9)),
-                               stejne_jako=stejne.group(1) if stejne else None)
+                               stejne_jako=stejne.group(1) if stejne else None,
+                               nazev_en=nazev_en, role=role_latky(c, nazev_en or nazev))
     d.online = online
 
     # odkazy na navazující dráhy
@@ -457,7 +496,10 @@ def nacti_drahu(cesta, online=True, log=print):
     else:
         # výchozí = látka, ze které je po směru reakcí dosažitelné nejvíc dalších
         nasl = defaultdict(set)
-        for r in d.reakce:
+        bez_nosicu = [r for r in d.reakce
+                      if d.metabolity.get(r["a"], {}).get("role", "normal") == "normal"
+                      and d.metabolity.get(r["b"], {}).get("role", "normal") == "normal"]
+        for r in bez_nosicu:
             nasl[r["a"]].add(r["b"])
             if r["typ"] == "<=>":
                 nasl[r["b"]].add(r["a"])
@@ -471,13 +513,14 @@ def nacti_drahu(cesta, online=True, log=print):
                         q.append(v)
             return len(vid)
         vstup = defaultdict(int)
-        for r in d.reakce:
+        for r in bez_nosicu:
             vstup[r["b"]] += 1
             if r["typ"] == "<=>":
                 vstup[r["a"]] += 1
         s_odkazem = {c for c, *_ in d.odkazy}
         # přednost: látka, do které nic nevede a která je napojená na jinou dráhu
-        d.start = (max(d.metabolity, key=lambda c: (vstup[c] == 0 and c in s_odkazem,
+        bezne = [c for c, m in d.metabolity.items() if m.get("role", "normal") == "normal"]
+        d.start = (max(bezne or list(d.metabolity), key=lambda c: (vstup[c] == 0 and c in s_odkazem,
                                                     vstup[c] == 0, dosah(c),
                                                     -d.metabolity[c]["poradi"][0]))
                    if d.metabolity else None)
@@ -508,6 +551,8 @@ PODPOROVANE_DRAHY = """Které dráhy program umí
 Na co si dát pozor
 • Cyklické dráhy (citrátový cyklus, močovinový cyklus): zvol Rozložení → kruhové.
   Program vezme nejdelší cyklus ve vybrané části dráhy a nakreslí ho po kružnici.
+• Přenašeče (ThPP, lipoyllysin, NAD …) a meziprodukty vázané na enzymový komplex
+  (PDH, OGDH) jsou po načtení vypnuté – komplex je pak jedna šipka. Lze je zapnout.
 • Látky bez struktury v KEGG (protein, akceptor, polymery) mají jen rámeček s názvem.
 • KGML někdy uvádí nevratnou reakci obráceně – karta Reakce → „Otočit směr“.
 • U map nad 120 látek doporučuji vypnout části, které nepotřebuješ.
@@ -535,10 +580,14 @@ def priprav_graf(d, vybrane_met, vybrane_rx, start=None, otocene=(), odkazy=True
     start_rozl = start if start in d.metabolity else d.start   # i když je skrytý
     start = start_rozl if start_rozl in vybrane_met else None   # zvýraznění jen viditelného
     rx = []
+    def role_(c):
+        return d.metabolity.get(c, {}).get("role", "normal")
     for i in sorted(vybrane_rx):
         r = dict(d.reakce[i])
         if i in otocene:
             r["a"], r["b"] = r["b"], r["a"]
+        if any(c not in vybrane_met and role_(c) == "prenasec" for c in (r["a"], r["b"])):
+            continue                        # vypnutý přenašeč (ThPP, lipoyllysin …) se vynechá úplně
         rx.append(r)
 
     # pořadí pro rozložení: vzdálenost od výchozího metabolitu přes VŠECHNY vybrané reakce
@@ -598,7 +647,7 @@ def priprav_graf(d, vybrane_met, vybrane_rx, start=None, otocene=(), odkazy=True
     # a tečkovanými šipkami. Skrytá slepá větev se nekreslí vůbec.
     MEZERY.clear()
     mezery_uzly = []
-    if zkratky:
+    if True:
         skryte = {c for r in rx for c in (r["a"], r["b"]) if c not in vybrane_met}
         sous_s = defaultdict(set)
         for r in rx:
@@ -620,6 +669,31 @@ def priprav_graf(d, vybrane_met, vybrane_rx, start=None, otocene=(), odkazy=True
                         q.append(v)
             kset = set(komp)
             k_gap = min(klic(c) for c in komp)      # rámeček stojí na místě 1. skryté látky
+            if all(role_(c) == "vazany" for c in komp):
+                # řetězec meziproduktů vázaných na enzymový komplex -> jedna běžná šipka
+                pred_, nasl_, ecs, gs = set(), set(), [], []
+                for r in rx:
+                    a, b = r["a"], r["b"]
+                    if a not in kset and b not in kset:
+                        continue
+                    ecs += [x for x in r["ec"] if x not in ecs]
+                    gs += [x for x in r["geny"] if x not in gs]
+                    # směr podle zápisu reakce v KEGG (substrát -> produkt)
+                    if a in vybrane_met and b in kset:
+                        pred_.add(a)
+                    if b in vybrane_met and a in kset:
+                        nasl_.add(b)
+                for u in sorted(pred_, key=klic):
+                    for v in sorted(nasl_, key=klic):
+                        if u == v or frozenset((u, v)) in hrany:
+                            continue
+                        hrany[frozenset((u, v))] = None
+                        a_, b_ = sorted((u, v), key=klic)
+                        REAKCE.append((a_, b_, " · ".join(gs) if geny else "", " · ".join(ecs),
+                                       False, a_ != u, bool(gs), "", False, 0))
+                continue
+            if not zkratky:
+                continue
             pred_, nasl_ = set(), set()
             for r in rx:
                 for s_, w in ((r["a"], r["b"]), (r["b"], r["a"])):
@@ -1861,12 +1935,16 @@ def najdi_cyklus(uzly_, hrany_smery, limit_s=2.0, min_delka=3):
 
 def cyklus_v_draze(d):
     """Nejdelší cyklus v celé načtené dráze (pro nápovědu v okně)."""
+    # přenašeče (ThPP, NAD …) se nepočítají; vázané meziprodukty ano (spojují kroky komplexu)
+    uzly_ = {c for c, m in d.metabolity.items() if m.get("role", "normal") != "prenasec"}
     smery = []
     for r in d.reakce:
-        smery.append((r["a"], r["b"]))
-        if r["typ"] == "<=>":
-            smery.append((r["b"], r["a"]))
-    return najdi_cyklus(list(d.metabolity), smery, limit_s=1.5, min_delka=4)
+        if r["a"] in uzly_ and r["b"] in uzly_:
+            smery.append((r["a"], r["b"]))
+            if r["typ"] == "<=>":
+                smery.append((r["b"], r["a"]))
+    cyk = najdi_cyklus(sorted(uzly_), smery, limit_s=1.5, min_delka=4)
+    return [c for c in cyk if d.metabolity[c].get("role", "normal") == "normal"]
 
 
 def oblouk_d(cx, cy, r, a0, a1, zacatek=True):
@@ -1938,7 +2016,7 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
     ncyk = set(cyklus)
 
     # --- poloměr kružnice podle velikosti uzlů ---
-    obvod = sum(math.hypot(uzly[c].w, uzly[c].h) * 0.85 + 70 for c in cyklus)
+    obvod = sum(math.hypot(uzly[c].w, uzly[c].h) * 0.85 + 125 for c in cyklus)   # + místo na šipku a popisek
     R = max(obvod / (2 * math.pi), 170.0)
     uhel = {c: -math.pi / 2 + 2 * math.pi * i / n for i, c in enumerate(cyklus)}
     cx0 = cy0 = 0.0
@@ -1986,6 +2064,30 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
             rozmisti(v)
     for c in cyklus:
         rozmisti(c)
+
+    # látka napojená na víc blízkých látek cyklu (např. acetyl-CoA k oxaloacetátu i citrátu)
+    # se natočí doprostřed mezi ně – i s celou svou větví
+    def potomci(u):
+        out = [u]
+        for v in deti[u]:
+            out += potomci(v)
+        return out
+    for c in cyklus:
+        for v in list(deti[c]):
+            sousede_c = [x for x in sous[v] if x in ncyk]
+            if len(sousede_c) < 2:
+                continue
+            sx_ = sum(math.cos(uhel[x]) for x in sousede_c)
+            sy_ = sum(math.sin(uhel[x]) for x in sousede_c)
+            if math.hypot(sx_, sy_) < 0.5 * len(sousede_c):
+                continue                    # sousedé jsou na opačných stranách kruhu
+            cil = math.atan2(sy_, sx_)
+            akt = math.atan2(uzly[v].y - cy0, uzly[v].x - cx0)
+            dl = cil - akt
+            cs, sn = math.cos(dl), math.sin(dl)
+            for u in potomci(v):
+                x_, y_ = uzly[u].x - cx0, uzly[u].y - cy0
+                uzly[u].x, uzly[u].y = cx0 + x_ * cs - y_ * sn, cy0 + x_ * sn + y_ * cs
 
     # uzly nenapojené na cyklus: do řady pod kružnici
     volne = [u for u in uzly_drahy if u not in hloubka]
@@ -2043,6 +2145,17 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
     def uvnitr_uzlu(m, x, y, pad=8):
         u = uzly[m]
         return abs(x - u.x) <= u.w / 2 + pad and abs(y - u.y) <= u.h / 2 + pad
+
+    def okraj_bod(m, x0, y0, x1, y1):
+        """Bod, kde úsečka (x0,y0)->(x1,y1) opouští uzel m."""
+        lo, hi = 0.0, 1.0
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            if uvnitr_uzlu(m, x0 + (x1 - x0) * mid, y0 + (y1 - y0) * mid):
+                lo = mid
+            else:
+                hi = mid
+        return x0 + (x1 - x0) * hi, y0 + (y1 - y0) * hi
 
     # --- šipky ---
     sipky, cary = [], {}          # cary: index -> body pro kolize a popisky
@@ -2108,7 +2221,49 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
                for k in range(41)]
         cary[j] = ("oblouk", pts, (t0 + t1) / 2)
 
-    # b) ostatní hrany: rovné čáry mezi okraji uzlů
+    # b) spojnice mezi blízkými (nesousedními) látkami cyklu: oblouk po vnitřní straně kruhu
+    poz_c = {c: i for i, c in enumerate(cyklus)}
+    R_in = R - max(math.hypot(uzly[c].w, uzly[c].h) / 2 for c in cyklus) - 22
+    for j, r in enumerate(REAKCE):
+        a, b = r[0], r[1]
+        if j in nakreslene or a not in ncyk or b not in ncyk or R_in < 60:
+            continue
+        krok_c = (poz_c[b] - poz_c[a]) % n
+        if min(krok_c, n - krok_c) > max(2, n // 3):
+            continue                        # vzdálené látky -> rovná čára (níže)
+        smery_r = smery_hrany(r)
+        u_, v_ = (a, b) if (a, b) in smery_r else (b, a)
+        ta = uhel[u_]
+        tb = uhel[v_]
+        # kratší směr po kruhu
+        dt = (tb - ta) % (2 * math.pi)
+        if dt > math.pi:
+            dt -= 2 * math.pi
+        tb = ta + dt
+        barva, sirka, carky = styl(r)
+        (xa, ya), (xb, yb) = stred_struktury(u_), stred_struktury(v_)
+        p_in_a = (cx0 + R_in * math.cos(ta), cy0 + R_in * math.sin(ta))
+        p_in_b = (cx0 + R_in * math.cos(tb), cy0 + R_in * math.sin(tb))
+        pa = okraj_bod(u_, xa, ya, *p_in_a)
+        pb = okraj_bod(v_, xb, yb, *p_in_b)
+        L = math.hypot(pb[0] - p_in_b[0], pb[1] - p_in_b[1]) or 1
+        ux, uy = (pb[0] - p_in_b[0]) / L, (pb[1] - p_in_b[1]) / L
+        konec = (pb[0] - ux * (HROT_DELKA - 1.5), pb[1] - uy * (HROT_DELKA - 1.5))
+        d_ = (f"M{_fmt(pa[0])},{_fmt(pa[1])} L{_fmt(p_in_a[0])},{_fmt(p_in_a[1])}"
+              + oblouk_d(cx0, cy0, R_in, ta, tb, zacatek=False)
+              + f" L{_fmt(konec[0])},{_fmt(konec[1])}")
+        sipky.append(f'<path d="{d_}" fill="none" stroke="{barva}" stroke-width="{sirka}" '
+                     f'stroke-linejoin="round"{carky}/>')
+        sipky.append(hrot_smer(pb, ux, uy, None, barva))
+        if (v_, u_) in smery_r:             # vratná: hrot i na začátku
+            L2 = math.hypot(pa[0] - p_in_a[0], pa[1] - p_in_a[1]) or 1
+            sipky.append(hrot_smer(pa, (pa[0] - p_in_a[0]) / L2, (pa[1] - p_in_a[1]) / L2, None, barva))
+        nakreslene.add(j)
+        pts = [(cx0 + R_in * math.cos(ta + (tb - ta) * k / 30), cy0 + R_in * math.sin(ta + (tb - ta) * k / 30))
+               for k in range(31)]
+        cary[j] = ("oblouk_in", pts, (ta + tb) / 2)
+
+    # c) ostatní hrany: rovné čáry mezi okraji uzlů
     def okraj(m, x0, y0, x1, y1):
         """Bod, kde úsečka (x0,y0)->(x1,y1) opouští uzel m."""
         lo, hi = 0.0, 1.0
@@ -2181,7 +2336,15 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
         lw = max(t.w for t, _ in radky)
         lh = sum(t.h + 1 for t, _ in radky)
         kandidati = []
-        if druh == "oblouk":
+        if druh == "oblouk_in":
+            for du in (0, -0.15, 0.15):
+                t = ustred + du * (2 * math.pi / n)
+                ox, oy = math.cos(t), math.sin(t)
+                vzd = abs(ox) * lw / 2 + abs(oy) * lh / 2
+                cxl = cx0 + (R_in - 10 - vzd) * ox
+                cyl = cy0 + (R_in - 10 - vzd) * oy
+                kandidati.append((cxl, cyl - lh / 2, abs(du) * 20))
+        elif druh == "oblouk":
             for du in (0, -0.12, 0.12):
                 t = ustred + du * (2 * math.pi / n)
                 for rr, pref in ((R + 12, 0), (R - 12, 4)):
@@ -2511,7 +2674,9 @@ def spust_gui(pocatecni=None):
     k_met = ttk.Frame(karty, padding=4)
     karty.add(k_met, text="Metabolity")
     ttk.Label(k_met, text="Klikni na řádek = zapnout/vypnout. Vypnutý metabolit uprostřed dráhy "
-                          "se nahradí tečkovanou šipkou „vynechány N kroky“.",
+                          "se nahradí rámečkem „⋯ vynechány N metabolity“.\n"
+                          "Přenašeče (ThPP, lipoyllysin …) a meziprodukty vázané na enzym jsou vypnuté: "
+                          "přenašeč se nekreslí, vázané meziprodukty se sloučí do jedné šipky komplexu.",
               foreground="#555").pack(anchor="w", pady=(0, 4))
     ram, tv_met = tabulka(k_met, ("✓", "Název", "KEGG", "Struktura", "Napojení"), (36, 330, 80, 80, 90))
     ram.pack(fill="both", expand=True)
@@ -2597,7 +2762,7 @@ def spust_gui(pocatecni=None):
 
     # --- volby ---
     ttk.Label(volby, text="Nastavení obrázku", font=("", 11, "bold")).pack(anchor="w", pady=(0, 8))
-    ttk.Label(volby, text="Výchozí metabolit (vlevo):").pack(anchor="w")
+    ttk.Label(volby, text="Výchozí metabolit (vlevo / nahoře):").pack(anchor="w")
     var_start = tk.StringVar()
     cb_start = ttk.Combobox(volby, textvariable=var_start, state="readonly", width=34)
     cb_start.pack(anchor="w", pady=(0, 8), fill="x")
@@ -2678,7 +2843,8 @@ def spust_gui(pocatecni=None):
         if not rx:
             messagebox.showinfo("Jen organismus", "Tento KGML neobsahuje geny organismu.")
             return
-        met = {c for i in rx for c in (d.reakce[i]["a"], d.reakce[i]["b"])}
+        met = {c for i in rx for c in (d.reakce[i]["a"], d.reakce[i]["b"])
+               if d.metabolity[c].get("role", "normal") == "normal"}
         for iid in tv_rx.get_children():
             prepni(tv_rx, [iid], ANO if int(iid) in rx else NE)
         for iid in tv_met.get_children():
@@ -2739,8 +2905,11 @@ def spust_gui(pocatecni=None):
             stupen[r["a"]] += 1
             stupen[r["b"]] += 1
         for c, m in sorted(d.metabolity.items(), key=lambda kv: kv[1]["poradi"]):
+            role = m.get("role", "normal")
+            pozn = {"prenasec": " · přenašeč", "vazany": " · vázaný na enzym"}.get(role, "")
             tv_met.insert("", "end", iid="m" + c,
-                          values=(ANO, m["nazev"], c, "ano" if m["zdroj"] else "—", f"{stupen[c]} reakcí"))
+                          values=(ANO if role == "normal" else NE, m["nazev"], c,
+                                  "ano" if m["zdroj"] else "—", f"{stupen[c]} reakcí{pozn}"))
         for i, r in enumerate(d.reakce):
             typ = {"<=>": "⇌", "->": "→", "->+": "→ (+)"}[r["typ"]]
             tv_rx.insert("", "end", iid=str(i),
@@ -2922,6 +3091,8 @@ def main():
     ap.add_argument("--bez-genu", action="store_true", help="bez názvů genů u enzymů")
     ap.add_argument("--zvyraznit", action="store_true", help="enzymy organismu zeleně")
     ap.add_argument("--kruh", action="store_true", help="kruhové rozložení (cyklické dráhy)")
+    ap.add_argument("--s-kofaktory", action="store_true",
+                    help="kreslit i přenašeče (ThPP, lipoyllysin …) a meziprodukty vázané na enzym")
     ap.add_argument("--plne-coa", action="store_true", help="kreslit celý koenzym A (bez zkratky CoA)")
     ap.add_argument("--delka-vazby", type=float, default=None, help="velikost struktur (px, výchozí 20)")
     ap.add_argument("--velikost-atomu", type=float, default=None, help="písmo atomů (výchozí 0.5)")
@@ -2950,7 +3121,8 @@ def main():
     rx = set(range(len(d.reakce)))
     if args.jen_organismus:
         rx = {i for i in rx if d.reakce[i]["geny"]}
-    met = {c for i in rx for c in (d.reakce[i]["a"], d.reakce[i]["b"])}
+    met = {c for i in rx for c in (d.reakce[i]["a"], d.reakce[i]["b"])
+           if args.s_kofaktory or d.metabolity[c].get("role", "normal") == "normal"}
     met -= {x.strip() for x in args.vynechat.split(",") if x.strip()}
     vystup = args.vystup or os.path.join(SLOZKA, f"{d.org}{d.cislo}_draha.svg")
     n, kriz = vytvor_svg(d, met, rx, vystup, start=args.start, popisky=args.popisky,
