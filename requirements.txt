@@ -1,0 +1,6 @@
+# Povinné
+rdkit>=2023.9
+matplotlib>=3.7
+
+# Volitelné – export do PDF/PNG, když není nainstalovaný nástroj rsvg-convert
+# cairosvg>=2.7
