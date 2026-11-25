@@ -28,9 +28,15 @@ choosing which metabolites and reactions to draw; hidden intermediates are repla
   nebo volitelně jako plné atomové vzorce.
 - **Rozložení bez křížení:** vrstvový (Sugiyamův) algoritmus s minimalizací křížení,
   pravoúhlé šipky, každá s vlastní svislou „kolejí“, a popisky enzymů s kontrolou kolizí.
-- **Kruhové rozložení pro cyklické dráhy** (citrátový cyklus, močovinový cyklus …):
-  program cyklus sám najde a nakreslí ho po kružnici, ostatní větve vedou paprskovitě ven.
-  Po načtení dráhy upozorní, že cyklus obsahuje.
+- **Tři rozložení:**
+  - *řádkové* – zleva doprava,
+  - *kompaktní* – dlouhá dráha se zalomí do více pásů (jako text na řádky), aby obrázek
+    vyšel blízko čtverci; šipky přes zalomení vedou vlastními koridory bez křížení,
+  - *kruhové* – cyklus po kružnici, ostatní větve paprskovitě ven.
+- **Cyklus jako kruh uvnitř řádkového / kompaktního rozložení:** např. citrátový cyklus se
+  nakreslí jako kruh a zbytek dráhy (glykolýza …) se k němu napojí v řádcích. Kruh se natočí
+  tak, aby látky napojené zleva byly vlevo; malé postranní větve leží vně kruhu u své látky.
+  Program najde všechny cykly v dráze a v okně si vybereš, který má být kruhem.
 - **Náhled přímo v okně** se zvětšováním a posouváním, bez ukládání souboru.
 - **Přenašeče a enzymové komplexy:** thiamindifosfát, lipoyllysin, NAD apod. se ve výchozím
   stavu nekreslí. Meziprodukty vázané na enzymový komplex (např. u pyruvátdehydrogenázy
@@ -123,7 +129,9 @@ python kegg_draha_svg.py --help                             # všechny volby
 |---|---|---|
 | Výchozí metabolit | `--start C00079` | látka úplně vlevo, od ní se dráha rozkládá |
 | Název pod / vedle struktury | `--popisky pod\|vpravo` | umístění názvu metabolitu |
-| Rozložení: řádkové / kruhové (cyklus) | `--kruh` | kruhové = nejdelší cyklus po kružnici, větve ven |
+| Rozložení: řádkové / kompaktní / kruhové | `--kompaktni`, `--kruh` | kompaktní = zalomení do pásů blízko čtverci |
+| cyklus jako kruh (řádkové / kompaktní) | `--cyklus-kruh` | cyklus jako kruh, zbytek dráhy v řádcích |
+| Cyklus: (výběr z nalezených cyklů) | `--cyklus C00036,C00158,…` | který cyklus má být kruhem (jinak nejdelší) |
 | navazující dráhy | `--bez-odkazu` | rámečky s odkazy na další dráhy KEGG |
 | názvy genů organismu | `--bez-genu` | geny z KGML u šipek |
 | zvýraznit enzymy organismu zeleně | `--zvyraznit` | jako zelené boxy v KEGG |
@@ -151,7 +159,7 @@ Výchozí hodnoty vzhledu a předvolby jsou ve skriptu v `VYCHOZI_VZHLED` a `PRE
 | Metabolické dráhy **00xxx** (glykolýza 00010, citrátový cyklus 00020, puriny 00230, aminokyseliny …) | ✔ |
 | Libovolný organismus (`gga`, `hsa`, `mmu`, `eco` …) i referenční mapy (`map`, `ko`) | ✔ |
 | Glykanové dráhy (00510, 00604 …) – symboly SNFG | ✔ |
-| Cyklické dráhy (00020 citrátový cyklus, močovinový cyklus …) – kruhové rozložení | ✔ |
+| Cyklické dráhy (00020 citrátový cyklus, močovinový cyklus …) – kruh, i napojený na zbytek dráhy | ✔ |
 | Signální a regulační dráhy **04xxx**, dráhy nemocí **05xxx** | ✘ – v KGML nejsou reakce mezi látkami, jen vztahy proteinů (program to oznámí) |
 | Přehledové mapy **01100, 01200** … | ✘ – příliš velké, bez popsaných reakcí |
 

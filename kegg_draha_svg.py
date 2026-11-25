@@ -554,6 +554,9 @@ PODPOROVANE_DRAHY = """Které dráhy program umí
 ✘ Přehledové mapy (01100, 01200 …) – příliš velké, bez popsaných reakcí.
 
 Na co si dát pozor
+• Kompaktní rozložení zalomí dlouhou dráhu do více pásů, aby vyšla blízko čtverci.
+• „Cyklus jako kruh“: cyklus (např. citrátový) se nakreslí jako kruh a zbytek dráhy
+  se k němu napojí řádkově nebo kompaktně.
 • Cyklické dráhy (citrátový cyklus, močovinový cyklus): zvol Rozložení → kruhové.
   Program vezme nejdelší cyklus ve vybrané části dráhy a nakreslí ho po kružnici.
 • Přenašeče (ThPP, lipoyllysin, NAD …) a meziprodukty vázané na enzymový komplex
@@ -574,6 +577,7 @@ NADPIS = ""
 PODNADPIS = ""
 ORGANISMUS = ""
 ZVYRAZNIT = False
+VYBRANY_CYKLUS = []  # látky cyklu zvolené v okně (jinak nejdelší cyklus)
 POSLEDNI_SVG = ""  # text posledního vytvořeného SVG (pro náhled)
 MEZERY = {}       # id rámečku vynechaných kroků -> seznam skrytých metabolitů
 
@@ -741,10 +745,11 @@ def priprav_graf(d, vybrane_met, vybrane_rx, start=None, otocene=(), odkazy=True
 def vytvor_svg(d, vybrane_met, vybrane_rx, vystup, start=None, otocene=(), popisky="pod",
                odkazy=True, geny=True, zvyraznit=False, zkratky=True, nadpis=None,
                glykany_atomy=False, zkratit_coa=True, delka_vazby=None, velikost_atomu=None,
-               rozlozeni="radky", vzhled=None):
+               rozlozeni="radky", vzhled=None, cyklus_kruh=False, cyklus=None):
     """Hlavní funkce: z výběru vytvoří SVG soubor. Vrací (počet uzlů, počet křížení)."""
     global NADPIS, PODNADPIS, ORGANISMUS, ZVYRAZNIT, ZKRACOVAT_COA, DELKA_VAZBY, FONT_ATOMU
     pouzij_vzhled(vzhled)
+    VYBRANY_CYKLUS[:] = list(cyklus or [])
     ZVYRAZNIT = zvyraznit
     ZKRACOVAT_COA = zkratit_coa
     if delka_vazby:
@@ -771,7 +776,11 @@ def vytvor_svg(d, vybrane_met, vybrane_rx, vystup, start=None, otocene=(), popis
                  + (f", {n_zk}× vynechané kroky" if n_zk else "")
                  + " · struktury RDKit · celý obrázek vektorově")
     global POSLEDNI_SVG
-    svg, krizeni = (sestav_kruh if rozlozeni == "kruh" else sestav)(uzly, popisky)
+    if rozlozeni == "kruh":
+        svg, krizeni = sestav_kruh(uzly, popisky)
+    else:
+        svg, krizeni = sestav(uzly, popisky, kompaktni=(rozlozeni == "kompaktni"),
+                              cyklus_kruh=cyklus_kruh)
     POSLEDNI_SVG = svg
     if vystup:                      # vystup=None -> jen náhled, nic se neukládá
         with open(vystup, "w", encoding="utf-8") as f:
@@ -1501,19 +1510,335 @@ def priprav_data_uzlu(uzly_drahy, popisky="pod"):
     return data
 
 
-def sestav(uzly_drahy, popisky="pod"):
-    """Řádkové rozložení (zleva doprava) s pravoúhlými šipkami."""
+def _styl_reakce(r):
+    """Barva, tloušťka a čárkování šipky podle položky REAKCE."""
+    a, b, geny, ec, vratna, zpet, pritomna, vedl, carkovana, zkratka = r
+    if zkratka:
+        return BARVA_ZKRATKA, TLOUSTKA_SIPEK * 1.3, ' stroke-dasharray="0.1 4.5" stroke-linecap="round"'
+    zel = pritomna and ZVYRAZNIT
+    return (BARVA_ORG if zel else BARVA_SIPKY, TLOUSTKA_SIPEK * 1.4 if zel else TLOUSTKA_SIPEK,
+            ' stroke-dasharray="5 4"' if carkovana else '')
+
+
+def kresli_cyklus_na_kruhu(cyklus, uzly, box_struktury, cx0, cy0, R, uhel):
+    """Šipky mezi látkami cyklu rozmístěnými po kružnici (střed cx0, cy0, poloměr R).
+    Vrací (svg cesty, {index REAKCE: (druh, body, úhel středu)}, nakreslené indexy, R_in)."""
+    n = len(cyklus)
+    ncyk = set(cyklus)
+    sipky, cary, nakreslene = [], {}, set()
+
+    def stred_struktury(m):
+        sx, sy, sw, sh = box_struktury(m)
+        return sx + sw / 2, sy + sh / 2
+
+    def uvnitr_uzlu(m, x, y, pad=8):
+        u = uzly[m]
+        return abs(x - u.x) <= u.w / 2 + pad and abs(y - u.y) <= u.h / 2 + pad
+
+    def okraj_bod(m, x0, y0, x1, y1):
+        lo, hi = 0.0, 1.0
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            if uvnitr_uzlu(m, x0 + (x1 - x0) * mid, y0 + (y1 - y0) * mid):
+                lo = mid
+            else:
+                hi = mid
+        return x0 + (x1 - x0) * hi, y0 + (y1 - y0) * hi
+
+    def konec_oblouku(c, a_start, smer):
+        lo, hi = 0.0, math.pi / n
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            t = a_start + smer * mid
+            if uvnitr_uzlu(c, cx0 + R * math.cos(t), cy0 + R * math.sin(t)):
+                lo = mid
+            else:
+                hi = mid
+        return a_start + smer * hi
+
+    # a) sousedé v cyklu: oblouk po kružnici
+    for i, c in enumerate(cyklus):
+        c2 = cyklus[(i + 1) % n]
+        idx = [j for j, r in enumerate(REAKCE) if {r[0], r[1]} == {c, c2}]
+        if not idx:
+            continue
+        j = idx[0]
+        nakreslene.add(j)
+        r = REAKCE[j]
+        barva, sirka, carky = _styl_reakce(r)
+        a0 = uhel[c]
+        a1 = uhel[c2] if uhel[c2] > a0 else uhel[c2] + 2 * math.pi
+        t0 = konec_oblouku(c, a0, +1) + 0.01
+        t1 = konec_oblouku(c2, a1, -1) - 0.01
+        dozadu = HROT_DELKA / R
+        smery_r = smery_hrany(r)
+        if (c, c2) in smery_r and (c2, c) in smery_r:
+            o = ROZESTUP_VRATNE
+            for rr, od, do_, smer in ((R + o, t0, t1 - dozadu, +1), (R - o, t1, t0 + dozadu, -1)):
+                sipky.append(f'<path d="{oblouk_d(cx0, cy0, rr, od, do_)}" fill="none" stroke="{barva}" '
+                             f'stroke-width="{sirka}"{carky}/>')
+                tip_u = do_ + smer * dozadu
+                tip = (cx0 + rr * math.cos(tip_u), cy0 + rr * math.sin(tip_u))
+                sipky.append(hrot_smer(tip, -math.sin(tip_u) * smer, math.cos(tip_u) * smer, "vlevo", barva))
+        else:
+            od, do_, smer = (t0, t1, +1) if (c, c2) in smery_r else (t1, t0, -1)
+            sipky.append(f'<path d="{oblouk_d(cx0, cy0, R, od, do_ - smer * dozadu)}" fill="none" '
+                         f'stroke="{barva}" stroke-width="{sirka}"{carky}/>')
+            tip = (cx0 + R * math.cos(do_), cy0 + R * math.sin(do_))
+            sipky.append(hrot_smer(tip, -math.sin(do_) * smer, math.cos(do_) * smer, None, barva))
+        pts = [(cx0 + R * math.cos(t0 + (t1 - t0) * k / 40), cy0 + R * math.sin(t0 + (t1 - t0) * k / 40))
+               for k in range(41)]
+        cary[j] = ("oblouk", pts, (t0 + t1) / 2)
+
+    # b) ostatní spojnice uvnitř cyklu: oblouk po vnitřní straně kruhu
+    R_in = max(40.0, R - max(math.hypot(uzly[c].w, uzly[c].h) / 2 for c in cyklus) - 22)
+    for j, r in enumerate(REAKCE):
+        a, b = r[0], r[1]
+        if j in nakreslene or a not in ncyk or b not in ncyk:
+            continue
+        smery_r = smery_hrany(r)
+        u_, v_ = (a, b) if (a, b) in smery_r else (b, a)
+        ta, tb = uhel[u_], uhel[v_]
+        dt = (tb - ta) % (2 * math.pi)
+        if dt > math.pi:
+            dt -= 2 * math.pi
+        tb = ta + dt
+        barva, sirka, carky = _styl_reakce(r)
+        (xa, ya), (xb, yb) = stred_struktury(u_), stred_struktury(v_)
+        p_in_a = (cx0 + R_in * math.cos(ta), cy0 + R_in * math.sin(ta))
+        p_in_b = (cx0 + R_in * math.cos(tb), cy0 + R_in * math.sin(tb))
+        pa = okraj_bod(u_, xa, ya, *p_in_a)
+        pb = okraj_bod(v_, xb, yb, *p_in_b)
+        L = math.hypot(pb[0] - p_in_b[0], pb[1] - p_in_b[1]) or 1
+        ux, uy = (pb[0] - p_in_b[0]) / L, (pb[1] - p_in_b[1]) / L
+        konec = (pb[0] - ux * (HROT_DELKA - 1.5), pb[1] - uy * (HROT_DELKA - 1.5))
+        d_ = (f"M{_fmt(pa[0])},{_fmt(pa[1])} L{_fmt(p_in_a[0])},{_fmt(p_in_a[1])}"
+              + oblouk_d(cx0, cy0, R_in, ta, tb, zacatek=False)
+              + f" L{_fmt(konec[0])},{_fmt(konec[1])}")
+        sipky.append(f'<path d="{d_}" fill="none" stroke="{barva}" stroke-width="{sirka}" '
+                     f'stroke-linejoin="round"{carky}/>')
+        sipky.append(hrot_smer(pb, ux, uy, None, barva))
+        if (v_, u_) in smery_r:
+            L2 = math.hypot(pa[0] - p_in_a[0], pa[1] - p_in_a[1]) or 1
+            sipky.append(hrot_smer(pa, (pa[0] - p_in_a[0]) / L2, (pa[1] - p_in_a[1]) / L2, None, barva))
+        nakreslene.add(j)
+        pts = [(cx0 + R_in * math.cos(ta + (tb - ta) * k / 30), cy0 + R_in * math.sin(ta + (tb - ta) * k / 30))
+               for k in range(31)]
+        cary[j] = ("oblouk_in", pts, (ta + tb) / 2)
+    return sipky, cary, nakreslene, R_in
+
+
+def kandidati_popisku_kruhu(druh, ustred, lw, lh, cx0, cy0, R, R_in, n):
+    """Kandidátní pozice popisku enzymu u oblouku cyklu (vně / uvnitř kruhu)."""
+    out = []
+    if druh == "oblouk_in":
+        for du in (0, -0.15, 0.15):
+            t = ustred + du * (2 * math.pi / n)
+            ox, oy = math.cos(t), math.sin(t)
+            vzd = abs(ox) * lw / 2 + abs(oy) * lh / 2
+            out.append((cx0 + (R_in - 10 - vzd) * ox, cy0 + (R_in - 10 - vzd) * oy - lh / 2, abs(du) * 20))
+    else:
+        for du in (0, -0.12, 0.12):
+            t = ustred + du * (2 * math.pi / n)
+            ox, oy = math.cos(t), math.sin(t)
+            vzd = abs(ox) * lw / 2 + abs(oy) * lh / 2
+            for znam, pref in ((1, 0), (-1, 4)):
+                rr = R + znam * (12 + vzd)
+                out.append((cx0 + rr * ox, cy0 + rr * oy - lh / 2, pref + abs(du) * 20))
+    return out
+
+
+def kresli_rovne_hrany(indexy, uzly, box_struktury):
+    """Rovné šipky mezi okraji uzlů (pro postranní větve kolem kruhu).
+    Vrací (svg cesty, {index REAKCE: ("usecka", body, None)})."""
+    sipky, cary = [], {}
+
+    def uvnitr_uzlu(m, x, y, pad=8):
+        u = uzly[m]
+        return abs(x - u.x) <= u.w / 2 + pad and abs(y - u.y) <= u.h / 2 + pad
+
+    def okraj(m, x0, y0, x1, y1):
+        lo, hi = 0.0, 1.0
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            if uvnitr_uzlu(m, x0 + (x1 - x0) * mid, y0 + (y1 - y0) * mid):
+                lo = mid
+            else:
+                hi = mid
+        return x0 + (x1 - x0) * hi, y0 + (y1 - y0) * hi
+
+    def stred(m):
+        sx, sy, sw, sh = box_struktury(m)
+        return sx + sw / 2, sy + sh / 2
+
+    for j in indexy:
+        r = REAKCE[j]
+        a, b = r[0], r[1]
+        barva, sirka, carky = _styl_reakce(r)
+        (xa, ya), (xb, yb) = stred(a), stred(b)
+        pa = okraj(a, xa, ya, xb, yb)
+        pb = okraj(b, xb, yb, xa, ya)
+        L = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+        if L < HROT_DELKA * 2:
+            continue
+        ux, uy = (pb[0] - pa[0]) / L, (pb[1] - pa[1]) / L
+        smery_r = smery_hrany(r)
+
+        def usecka(p, q, ux_, uy_, pul):
+            konec = (q[0] - ux_ * (HROT_DELKA - 1.5), q[1] - uy_ * (HROT_DELKA - 1.5))
+            sipky.append(f'<path d="M{_fmt(p[0])},{_fmt(p[1])} L{_fmt(konec[0])},{_fmt(konec[1])}" '
+                         f'fill="none" stroke="{barva}" stroke-width="{sirka}"{carky}/>')
+            sipky.append(hrot_smer(q, ux_, uy_, pul, barva))
+        if (a, b) in smery_r and (b, a) in smery_r:
+            o = ROZESTUP_VRATNE
+            nx, ny = uy * o, -ux * o
+            usecka((pa[0] + nx, pa[1] + ny), (pb[0] + nx, pb[1] + ny), ux, uy, "vlevo")
+            usecka((pb[0] - nx, pb[1] - ny), (pa[0] - nx, pa[1] - ny), -ux, -uy, "vlevo")
+        elif (a, b) in smery_r:
+            usecka(pa, pb, ux, uy, None)
+        else:
+            usecka(pb, pa, -ux, -uy, None)
+        pts = [(pa[0] + (pb[0] - pa[0]) * k / 30, pa[1] + (pb[1] - pa[1]) * k / 30) for k in range(31)]
+        cary[j] = ("usecka", pts, None)
+    return sipky, cary
+
+
+def kandidati_popisku_usecky(pts, lw, lh):
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    L = math.hypot(x1 - x0, y1 - y0) or 1
+    nx, ny = (y1 - y0) / L, -(x1 - x0) / L
+    out = []
+    for f in (0.5, 0.35, 0.65):
+        mx, my = x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
+        for znam, pref in ((1, 0), (-1, 2)):
+            vzd = abs(nx) * lw / 2 + abs(ny) * lh / 2 + 6
+            out.append((mx + znam * nx * vzd, my + znam * ny * vzd - lh / 2, pref + abs(f - 0.5) * 10))
+    return out
+
+
+def hrany_k_otoceni(uzly_, hrany_):
+    """Indexy hran, které je třeba pro rozložení otočit, aby graf neměl cyklus (DFS)."""
+    nasl = defaultdict(list)
+    vstup = defaultdict(int)
+    for i, (a, b) in enumerate(hrany_):
+        nasl[a].append((b, i))
+        vstup[b] += 1
+    stav, otocit = {}, set()
+    poradi = sorted(uzly_, key=lambda u: (vstup[u] > 0, ))
+    for s0 in poradi:
+        if s0 in stav:
+            continue
+        stav[s0] = 1
+        zasobnik = [(s0, iter(nasl[s0]))]
+        while zasobnik:
+            u, it = zasobnik[-1]
+            dalsi = next(it, None)
+            if dalsi is None:
+                stav[u] = 2
+                zasobnik.pop()
+                continue
+            v, i = dalsi
+            if stav.get(v) == 1:
+                otocit.add(i)                  # zpětná hrana
+            elif v not in stav:
+                stav[v] = 1
+                zasobnik.append((v, iter(nasl[v])))
+    return otocit
+
+
+def sestav(uzly_drahy, popisky="pod", kompaktni=False, cyklus_kruh=False):
+    """Řádkové rozložení (zleva doprava) s pravoúhlými šipkami.
+    kompaktni   – sloupce se zalomí do více pásů, aby obrázek vyšel blízko čtverci;
+    cyklus_kruh – nejdelší cyklus se nakreslí jako kruh (blok uvnitř rozložení)."""
     data = priprav_data_uzlu(uzly_drahy, popisky)
+    hrany_real = [(r[0], r[1]) for r in REAKCE]
+
+    # --- cyklus jako jeden blok ---
+    cyklus, BLOK = [], "cyc:0"
+    if cyklus_kruh:
+        smery = set()
+        for r in REAKCE:
+            if ":" in r[0] + r[1] and not (r[0].startswith("gap:") or r[1].startswith("gap:")):
+                continue
+            smery |= smery_hrany(r)
+        cyklus = vyber_cyklus([u for u in uzly_drahy if not u.startswith("map:")], smery)
+        if len(cyklus) < 3:
+            raise ValueError("Ve vybrané části dráhy nebyl nalezen žádný cyklus (alespoň 3 látky "
+                             "spojené reakcemi do kruhu).\n\nVypni volbu „cyklus jako kruh“, nebo "
+                             "zkontroluj směry reakcí (karta Reakce → Otočit směr).")
+    ncyk = set(cyklus)
+    satelity, hloubka_sat = {}, {}         # malé postranní větve: látka -> látka cyklu
+    kotvy_sat = {}                         # látka -> látky cyklu, na které je větev napojená
+    if cyklus:
+        sous_v = defaultdict(set)
+        for a, b in hrany_real:
+            sous_v[a].add(b)
+            sous_v[b].add(a)
+        vid = set()
+        for u0 in uzly_drahy:
+            if u0 in ncyk or u0 in vid:
+                continue
+            komp, q = [], [u0]
+            vid.add(u0)
+            while q:
+                u = q.pop()
+                komp.append(u)
+                for v in sous_v[u]:
+                    if v not in ncyk and v not in vid:
+                        vid.add(v)
+                        q.append(v)
+            kotvy = {c for u in komp for c in sous_v[u] if c in ncyk}
+            poz_ = {c: i for i, c in enumerate(cyklus)}
+            sousedni = False
+            if len(kotvy) == 2:
+                c1, c2 = sorted(kotvy, key=poz_.get)
+                dd_ = (poz_[c2] - poz_[c1]) % len(cyklus)
+                sousedni = min(dd_, len(cyklus) - dd_) <= 2
+            if (len(kotvy) == 1 or sousedni) and len(komp) <= 3:
+                c = sorted(kotvy, key=poz_.get)[0]
+                q, hl = deque(sorted(kotvy)), {k_: 0 for k_ in kotvy}
+                while q:
+                    u = q.popleft()
+                    for v in sous_v[u]:
+                        if v in komp and v not in hl:
+                            hl[v] = hl[u] + 1
+                            q.append(v)
+                for u in komp:
+                    satelity[u] = c
+                    kotvy_sat[u] = tuple(sorted(kotvy))
+                    hloubka_sat[u] = hl.get(u, 1)
+        obvod = sum(math.hypot(data[c]["w"], data[c]["h"]) * 0.85 + 125 for c in cyklus)
+        R_kruh = max(obvod / (2 * math.pi), 150.0)
+        presah = max(max(data[c]["w"], data[c]["h"]) for c in cyklus) / 2 + 70
+        krok_sat = max([math.hypot(data[u]["w"], data[u]["h"]) for u in satelity], default=0) * 0.75 + 80
+        dmax = max(hloubka_sat.values(), default=0)
+        B = 2 * (R_kruh + presah + dmax * krok_sat)
+        data[BLOK] = dict(sw=B, sh=B, body="", t_n=None, t_p=[], w=B, h=B)
+
+    def na_blok(m):
+        return BLOK if m in ncyk else m
+    vnitrni = {i for i, (a, b) in enumerate(hrany_real) if a in ncyk and b in ncyk}
+    hrany_sat = {i for i, (a, b) in enumerate(hrany_real) if a in satelity or b in satelity}
+    vnitrni |= hrany_sat
+    uzly_rozl = [u for u in uzly_drahy if u not in ncyk and u not in satelity] + ([BLOK] if cyklus else [])
+    hrany_lay = {i: (na_blok(a), na_blok(b)) for i, (a, b) in enumerate(hrany_real) if i not in vnitrni}
+    klice = sorted(hrany_lay)
+    otocene = {klice[k] for k in hrany_k_otoceni(uzly_rozl, [hrany_lay[i] for i in klice])}
+    hrany = list(hrany_real)                      # skutečné konce ve směru rozložení
+    for i in otocene:
+        a, b = hrany_lay[i]
+        hrany_lay[i] = (b, a)
+        hrany[i] = (hrany_real[i][1], hrany_real[i][0])
 
     # --- graf ---
-    hrany = [(r[0], r[1]) for r in REAKCE]
-    vrstva = prirad_vrstvy(list(uzly_drahy), hrany)
-    uzly = {m: Uzel(m, data[m]["w"], data[m]["h"]) for m in uzly_drahy}
+    vrstva = prirad_vrstvy(list(uzly_rozl), [hrany_lay[i] for i in klice])
+    uzly = {m: Uzel(m, data[m]["w"], data[m]["h"]) for m in uzly_rozl}
     for m, u in uzly.items():
         u.layer = vrstva[m]
 
     retezy, seg_hrany, k = {}, [], 0
-    for i, (a, b) in enumerate(hrany):
+    for i in klice:
+        a, b = hrany_lay[i]
         cesta = [a]
         for L in range(vrstva[a] + 1, vrstva[b]):
             did = f"_d{k}"
@@ -1533,7 +1858,7 @@ def sestav(uzly_drahy, popisky="pod"):
 
     vrstvy = [[] for _ in range(nL)]
     videno = set()
-    q = deque([m for m in uzly_drahy if vrstva[m] == 0])
+    q = deque([m for m in uzly_rozl if vrstva[m] == 0])
     while q:
         u = q.popleft()
         if u in videno:
@@ -1541,7 +1866,7 @@ def sestav(uzly_drahy, popisky="pod"):
         videno.add(u)
         vrstvy[uzly[u].layer].append(u)
         q.extend(nasl[u])
-    for m in uzly:                       # pro jistotu (nedosažitelné uzly)
+    for m in uzly:
         if m not in videno:
             vrstvy[uzly[m].layer].append(m)
     hrany_seg = [[(u, v) for u, v in seg_hrany if uzly[u].layer == i] for i in range(nL - 1)]
@@ -1552,24 +1877,14 @@ def sestav(uzly_drahy, popisky="pod"):
     sirka_vrstvy = [max([uzly[u].w for u in l], default=0) for l in vrstvy]
     mezery = [MIN_MEZERA_VRSTEV] * (nL - 1)
     max_lw = defaultdict(float)
-    for i, (a, b) in enumerate(hrany):
+    for i in klice:
         lw = max([t.w for t, _ in popisky_reakci[i]], default=0)
-        max_lw[vrstva[a]] = max(max_lw[vrstva[a]], lw)
-    # mezera = pás kolejí (svislé úseky) + místo pro popisky na vodorovných úsecích
+        g = vrstva[hrany_lay[i][0]]
+        max_lw[g] = max(max_lw[g], lw)
     for g in range(nL - 1):
         n = len(hrany_seg[g])
         pas = PAD_KOLEJ + max(n - 1, 0) * ROZESTUP_KOLEJI
         mezery[g] = max(MIN_MEZERA_VRSTEV, pas + max_lw[g] + 2 * OKRAJ_POPISKU + HROT_DELKA)
-
-    top0 = OKRAJ + 80
-    x = OKRAJ
-    sloupec_x = []
-    for i in range(nL):
-        sloupec_x.append(x)
-        for u in vrstvy[i]:
-            uzly[u].x = x + sirka_vrstvy[i] / 2
-        x += sirka_vrstvy[i] + (mezery[i] if i < nL - 1 else 0)
-    celkova_sirka = x + OKRAJ
 
     # --- svislé souřadnice (PAV) ---
     for l in vrstvy:
@@ -1597,7 +1912,7 @@ def sestav(uzly_drahy, popisky="pod"):
             nove = pav_s_mezerami(zadane, [uzly[u].h for u in l], MEZERA_SVISLE)
             for u, y in zip(l, nove):
                 uzly[u].y = y
-    # nesouvislé části grafu naskládat těsně pod sebe (bez prázdných mezer)
+    # nesouvislé části grafu naskládat těsně pod sebe
     sous_k = defaultdict(set)
     for u, v in seg_hrany:
         sous_k[u].add(v)
@@ -1626,10 +1941,172 @@ def sestav(uzly_drahy, popisky="pod"):
                 for u in komp:
                     uzly[u].y += posun
             spodek = max(uzly[u].y + uzly[u].h / 2 for u in komp)
-    ymin = min(u.y - u.h / 2 for u in uzly.values())
-    for u in uzly.values():
-        u.y += top0 - ymin
+
+    # --- zalomení do pásů (kompaktní rozložení) ---
+    pasy = [list(range(nL))]
+    if kompaktni and nL > 2:
+        sirky_vr = [sirka_vrstvy[i] + (mezery[i] if i < nL - 1 else 0) for i in range(nL)]
+        celk = sum(sirky_vr)
+
+        def rozdel(nb):
+            cil, out, akt, w_akt = celk / nb, [], [], 0.0
+            for i in range(nL):
+                if akt and w_akt + sirky_vr[i] / 2 > cil and len(out) < nb - 1:
+                    out.append(akt)
+                    akt, w_akt = [], 0.0
+                akt.append(i)
+                w_akt += sirky_vr[i]
+            out.append(akt)
+            return out
+
+        def vyska_pasu(p):
+            uz = [u for u in uzly.values() if u.layer in p]
+            return max(u.y + u.h / 2 for u in uz) - min(u.y - u.h / 2 for u in uz)
+        nej = None
+        for nb in range(1, min(nL, 8) + 1):
+            p = rozdel(nb)
+            w = max(sum(sirky_vr[i] for i in pp) for pp in p)
+            h = sum(vyska_pasu(pp) for pp in p) + 160 * (len(p) - 1)
+            skore = abs(math.log(max(w, 1) / max(h, 1) / 1.3))       # cíl: poměr stran ~ 4:3
+            if nej is None or skore < nej[0]:
+                nej = (skore, p)
+        pasy = nej[1]
+    pas_vrstvy = {L: b for b, p in enumerate(pasy) for L in p}
+    if len(pasy) > 1:
+        # každý pás znovu „setřást“: svislé polohy jen podle sousedů ve stejném pásu
+        for p in pasy:
+            pset = set(p)
+            for L in p:
+                y = 0
+                for u in vrstvy[L]:
+                    uzly[u].y = y + uzly[u].h / 2
+                    y += uzly[u].h + MEZERA_SVISLE
+            for it in range(80):
+                for L in (p if it % 2 == 0 else list(reversed(p))):
+                    l = vrstvy[L]
+                    if not l:
+                        continue
+                    zadane = []
+                    for u in l:
+                        sous = [v for v in pred[u] + nasl[u] if uzly[v].layer in pset]
+                        if sous:
+                            wsum = ysum = 0.0
+                            for v in sous:
+                                wt = 2.0 if (uzly[u].dummy or uzly[v].dummy) else 1.0
+                                wsum += wt
+                                ysum += wt * uzly[v].y
+                            zadane.append(ysum / wsum)
+                        else:
+                            zadane.append(uzly[u].y)
+                    nove = pav_s_mezerami(zadane, [uzly[u].h for u in l], MEZERA_SVISLE)
+                    for u, y in zip(l, nove):
+                        uzly[u].y = y
+
+    # hrany přes zalomení: počty pro okraje a koridory
+    zalom = defaultdict(list)                 # číslo pásu -> [(i, úsek)] úseků, které z něj odcházejí
+    for i in klice:
+        cesta = retezy[i]
+        for kk in range(len(cesta) - 1):
+            L = uzly[cesta[kk]].layer
+            if pas_vrstvy[L] != pas_vrstvy[L + 1]:
+                zalom[pas_vrstvy[L]].append((i, kk))
+    sloupec_x = [0.0] * nL
+    top0 = OKRAJ + 80
+    y_akt = top0
+    koridor = {}
+    celkova_sirka = 0.0
+    for b, p in enumerate(pasy):
+        n_vstup = len(zalom.get(b - 1, []))
+        x = OKRAJ + (PAD_KOLEJ + n_vstup * ROZESTUP_KOLEJI + 10 if n_vstup else 0)
+        for i in p:
+            sloupec_x[i] = x
+            x += sirka_vrstvy[i] + (mezery[i] if i < p[-1] else 0)
+        n_vystup = len(zalom.get(b, []))
+        konec_pasu = x + (PAD_KOLEJ + n_vystup * ROZESTUP_KOLEJI + 10 if n_vystup else 0)
+        celkova_sirka = max(celkova_sirka, konec_pasu + OKRAJ)
+        uz = [u for u in uzly.values() if u.layer in p]
+        ymin_p = min(u.y - u.h / 2 for u in uz)
+        for u in uz:
+            u.x = sloupec_x[u.layer] + sirka_vrstvy[u.layer] / 2
+            u.y += y_akt - ymin_p
+        y_akt = max(u.y + u.h / 2 for u in uz)
+        if n_vystup:
+            koridor[b] = (konec_pasu - 10, y_akt + 30)         # x pravého okraje, y prvního koridoru
+            y_akt += 30 + n_vystup * ROZESTUP_KOLEJI + 30
+        else:
+            y_akt += 2 * MEZERA_SVISLE
     ymax = max(u.y + u.h / 2 for u in uzly.values())
+
+    # --- látky cyklu po kružnici uvnitř bloku, natočené ke svým sousedům ---
+    if cyklus:
+        cx0, cy0 = uzly[BLOK].x, uzly[BLOK].y
+        n = len(cyklus)
+        vnejsi = []                         # (látka cyklu, soused v rozložení)
+        for i in klice:
+            a, b = hrany[i]
+            cesta = retezy[i]
+            if a in ncyk:
+                vnejsi.append((a, uzly[cesta[1]]))
+            if b in ncyk:
+                vnejsi.append((b, uzly[cesta[-2]]))
+        nej = None
+        for poradi_c in (cyklus, list(reversed(cyklus))):
+            for st in range(72):
+                t0 = 2 * math.pi * st / 72
+                uh = {c: t0 + 2 * math.pi * k / n for k, c in enumerate(poradi_c)}
+                skore = 0.0
+                for c, sus in vnejsi:
+                    dx, dy = sus.x - cx0, sus.y - cy0
+                    L = math.hypot(dx, dy) or 1
+                    skore -= (math.cos(uh[c]) * dx + math.sin(uh[c]) * dy) / L
+                    skore += 0.5 * (1 if (dx < 0) != (math.cos(uh[c]) < 0) else 0)
+                if nej is None or skore < nej[0] - 1e-9:
+                    nej = (skore, poradi_c, uh)
+        _, cyklus, uhel = nej
+        for c in cyklus:
+            uzly[c] = Uzel(c, data[c]["w"], data[c]["h"])
+            uzly[c].x = cx0 + R_kruh * math.cos(uhel[c])
+            uzly[c].y = cy0 + R_kruh * math.sin(uhel[c])
+            uzly[c].layer = uzly[BLOK].layer
+            vrstva[c] = uzly[BLOK].layer
+        # postranní větve paprskovitě od své látky cyklu
+        n = len(cyklus)
+        skupiny = defaultdict(list)
+        for u, kot in kotvy_sat.items():
+            skupiny[kot].append(u)
+        for kot, skup in skupiny.items():
+            t_kot = math.atan2(sum(math.sin(uhel[c]) for c in kot), sum(math.cos(uhel[c]) for c in kot))
+            na_hl = defaultdict(list)
+            for u in sorted(skup, key=lambda u: hloubka_sat[u]):
+                na_hl[hloubka_sat[u]].append(u)
+            for hl, seznam in na_hl.items():
+                sirka_sekt = 2 * math.pi / n * 0.8
+                for kk, u in enumerate(seznam):
+                    t = t_kot + (kk - (len(seznam) - 1) / 2) * sirka_sekt / max(len(seznam), 1)
+                    rr = R_kruh + hl * krok_sat
+                    uzly[u] = Uzel(u, data[u]["w"], data[u]["h"])
+                    uzly[u].x, uzly[u].y = cx0 + rr * math.cos(t), cy0 + rr * math.sin(t)
+                    uzly[u].layer = uzly[BLOK].layer
+                    vrstva[u] = uzly[BLOK].layer
+        # překryvy: postranní větve se odsouvají po paprsku ven
+        kolem = list(cyklus) + list(satelity)
+        for _ in range(200):
+            pohyb = False
+            for x_ in range(len(kolem)):
+                for y_ in range(x_ + 1, len(kolem)):
+                    ua, ub = uzly[kolem[x_]], uzly[kolem[y_]]
+                    if (abs(ua.x - ub.x) < (ua.w + ub.w) / 2 + 24 and
+                            abs(ua.y - ub.y) < (ua.h + ub.h) / 2 + 24):
+                        u = ub if kolem[y_] in satelity else ua
+                        if u.id in ncyk:
+                            continue
+                        dx, dy = u.x - cx0, u.y - cy0
+                        L = math.hypot(dx, dy) or 1
+                        u.x += dx / L * 16
+                        u.y += dy / L * 16
+                        pohyb = True
+            if not pohyb:
+                break
 
     def box_struktury(m):
         u, dd = uzly[m], data[m]
@@ -1643,17 +2120,14 @@ def sestav(uzly_drahy, popisky="pod"):
         sx, sy, sw, sh = box_struktury(m)
         cy = sy + sh / 2
         for smer, slovnik in (("out", out_port), ("in", in_port)):
-            idx = [i for i, (a, b) in enumerate(hrany) if (a if smer == "out" else b) == m]
+            idx = [i for i in klice if (hrany[i][0] if smer == "out" else hrany[i][1]) == m]
             idx.sort(key=lambda i: uzly[retezy[i][1] if smer == "out" else retezy[i][-2]].y)
-            n = len(idx)
-            krok = min(14.0, max(9.0, sh * 0.9 / max(n, 1)))
+            n_ = len(idx)
+            krok = min(14.0, max(9.0, sh * 0.9 / max(n_, 1)))
             for j, i in enumerate(idx):
-                slovnik[i] = cy + (j - (n - 1) / 2) * krok
+                slovnik[i] = cy + (j - (n_ - 1) / 2) * krok
 
     # --- šipky: pravoúhlé vedení s vlastní „kolejí“ pro každou hranu ---
-    # Každý úsek hrany mezi dvěma sousedními vrstvami = vodorovně -> svisle -> vodorovně.
-    # Svislá část leží v mezeře na vlastní koleji (x). Pořadí kolejí se volí tak,
-    # aby bylo co nejméně průsečíků (lokální prohledávání přesunů).
     def koncove_body(i):
         a, b = hrany[i]
         sx, sy, sw, sh = box_struktury(a)
@@ -1663,41 +2137,46 @@ def sestav(uzly_drahy, popisky="pod"):
 
     body_hran = {}
     hopy = defaultdict(list)          # mezera -> [(index hrany, pořadí úseku, ys, yt)]
+    zalomene = {}                     # (i, úsek) -> číslo pásu, ze kterého úsek odchází
     porty_cile = defaultdict(list)
-    for i, (a, b) in enumerate(hrany):
-        porty_cile[b].append(i)
-    for i in range(len(hrany)):
+    for i in klice:
+        porty_cile[hrany[i][1]].append(i)
+    for i in klice:
         p0, p1 = koncove_body(i)
         cesta = retezy[i]
         pts = [p0] + [(uzly[d].x, uzly[d].y) for d in cesta[1:-1]] + [p1]
-        # malé „schůdky“ (< 12 px) srovnat do rovné čáry, pokud tím cílový port
-        # nesplyne s jiným portem téhož uzlu
-        for k in range(len(pts) - 1):
-            dy = pts[k + 1][1] - pts[k][1]
+        for kk in range(len(pts) - 1):
+            L = uzly[cesta[kk]].layer
+            if pas_vrstvy[L] != pas_vrstvy[L + 1]:
+                continue
+            dy = pts[kk + 1][1] - pts[kk][1]
             if 0.5 < abs(dy) < 12:
-                y_new = pts[k][1]
-                if k + 1 == len(pts) - 1:
+                y_new = pts[kk][1]
+                if kk + 1 == len(pts) - 1:
                     b = hrany[i][1]
                     sx_, sy_, sw_, sh_ = box_struktury(b)
                     volno = all(abs(in_port[j] - y_new) > 7 for j in porty_cile[b] if j != i)
                     if volno and sy_ + 4 < y_new < sy_ + sh_ - 4:
                         in_port[i] = y_new
-                        pts[k + 1] = (pts[k + 1][0], y_new)
+                        pts[kk + 1] = (pts[kk + 1][0], y_new)
                 else:
-                    pts[k + 1] = (pts[k + 1][0], y_new)
+                    pts[kk + 1] = (pts[kk + 1][0], y_new)
         body_hran[i] = pts
-        for k in range(len(pts) - 1):
-            g = vrstva[hrany[i][0]] + k
-            hopy[g].append((i, k, pts[k][1], pts[k + 1][1]))
+        for kk in range(len(pts) - 1):
+            L = uzly[cesta[kk]].layer
+            if pas_vrstvy[L] != pas_vrstvy[L + 1]:
+                zalomene[(i, kk)] = pas_vrstvy[L]
+            else:
+                hopy[L].append((i, kk, pts[kk][1], pts[kk + 1][1]))
 
     def cena(e, f):                   # počet křížení, když je e vlevo od f
         def uvnitr(y, a, b):
             lo, hi = min(a, b), max(a, b)
             return lo + 0.5 < y < hi - 0.5
         c = 0
-        if uvnitr(f[2], e[2], e[3]):  # zdrojový úsek f protne svislici e
+        if uvnitr(f[2], e[2], e[3]):
             c += 1
-        if uvnitr(e[3], f[2], f[3]):  # cílový úsek e protne svislici f
+        if uvnitr(e[3], f[2], f[3]):
             c += 1
         return c
 
@@ -1705,22 +2184,22 @@ def sestav(uzly_drahy, popisky="pod"):
         if len(h) < 2:
             return h
         o = sorted(range(len(h)), key=lambda i: (min(h[i][2], h[i][3]), h[i][3] - h[i][2]))
-        n = len(h)
-        C = [[cena(h[a], h[b]) for b in range(n)] for a in range(n)]   # C[a][b]: a vlevo od b
+        n_ = len(h)
+        C = [[cena(h[a], h[b]) for b in range(n_)] for a in range(n_)]
         konec_ = time.time() + 5
         zlepseno = True
         while zlepseno and time.time() < konec_:
             zlepseno = False
-            for x in range(n):              # přesun prvku na lepší místo (počítá se jen změna)
+            for x in range(n_):
                 e = o[x]
                 nej_d, nej_y, d = 0, x, 0
-                for y in range(x - 1, -1, -1):          # doleva
+                for y in range(x - 1, -1, -1):
                     f = o[y]
                     d += C[e][f] - C[f][e]
                     if d < nej_d:
                         nej_d, nej_y = d, y
                 d = 0
-                for y in range(x + 1, n):                # doprava
+                for y in range(x + 1, n_):
                     f = o[y]
                     d += C[f][e] - C[e][f]
                     if d < nej_d:
@@ -1738,16 +2217,33 @@ def sestav(uzly_drahy, popisky="pod"):
         for j, e in enumerate(usporadej(svisle)):
             kolej_x[(e[0], e[1])] = g_l + PAD_KOLEJ + j * ROZESTUP_KOLEJI
 
+    # úseky přes zalomení: pravý okraj dolů -> koridor doleva -> levý okraj dolů -> do cíle
+    trasa_zalomu = {}
+    for b, seznam in zalom.items():
+        if b not in koridor:
+            continue
+        x_prava, y_kor = koridor[b]
+        x_leva0 = OKRAJ + PAD_KOLEJ / 2
+        poradi_z = sorted(seznam, key=lambda e: body_hran[e[0]][e[1]][1])   # podle výšky zdroje
+        n_ = len(poradi_z)
+        for r_, (i, kk) in enumerate(poradi_z):
+            vnejsi_ = n_ - 1 - r_          # nejvyšší zdroj -> nejvíc vpravo, nejníž v koridoru
+            trasa_zalomu[(i, kk)] = (x_prava - r_ * ROZESTUP_KOLEJI,
+                                     y_kor + vnejsi_ * ROZESTUP_KOLEJI,
+                                     x_leva0 + vnejsi_ * ROZESTUP_KOLEJI)
+
     polyline = {}
     for i, pts in body_hran.items():
         pl = [pts[0]]
-        for k in range(len(pts) - 1):
-            (x0, y0), (x1, y1) = pts[k], pts[k + 1]
-            if (i, k) in kolej_x:
-                kx = kolej_x[(i, k)]
+        for kk in range(len(pts) - 1):
+            (x0, y0), (x1, y1) = pts[kk], pts[kk + 1]
+            if (i, kk) in trasa_zalomu:
+                xr, yk, xl = trasa_zalomu[(i, kk)]
+                pl += [(xr, y0), (xr, yk), (xl, yk), (xl, y1)]
+            elif (i, kk) in kolej_x:
+                kx = kolej_x[(i, kk)]
                 pl += [(kx, y0), (kx, y1)]
             pl.append((x1, y1))
-        # sloučit body ležící na jedné přímce
         cist = [pl[0]]
         for p in pl[1:]:
             if abs(p[0] - cist[-1][0]) < 1e-6 and abs(p[1] - cist[-1][1]) < 1e-6:
@@ -1762,15 +2258,10 @@ def sestav(uzly_drahy, popisky="pod"):
         polyline[i] = cist
 
     sipky = []
-    for i, (a, b, geny, ec, vratna, zpet, pritomna, vedl, carkovana, zkratka) in enumerate(REAKCE):
-        if zkratka:                 # vynechané kroky: tečkovaná fialová šipka
-            barva, sirka = BARVA_ZKRATKA, TLOUSTKA_SIPEK * 1.3
-            carky = ' stroke-dasharray="0.1 4.5" stroke-linecap="round"'
-        else:
-            zelena = pritomna and ZVYRAZNIT
-            barva = BARVA_ORG if zelena else BARVA_SIPKY
-            sirka = TLOUSTKA_SIPEK * 1.4 if zelena else TLOUSTKA_SIPEK
-            carky = ' stroke-dasharray="5 4"' if carkovana else ''
+    for i in klice:
+        r = REAKCE[i]
+        barva, sirka, carky = _styl_reakce(r)
+        vratna, zpet = r[4], r[5]
 
         def kresli(pl, dopredu, pul):
             pl = list(pl)
@@ -1788,34 +2279,42 @@ def sestav(uzly_drahy, popisky="pod"):
             kresli(posun_lomene(polyline[i], ROZESTUP_VRATNE), True, "nahore")
             kresli(posun_lomene(polyline[i], -ROZESTUP_VRATNE), False, "dole")
         else:
-            kresli(polyline[i], not zpet, None)
+            kresli(polyline[i], (not zpet) != (i in otocene), None)
+
+    # šipky uvnitř cyklu (oblouky)
+    cary_kruhu = {}
+    if cyklus:
+        s_kr, cary_kruhu, _, R_in = kresli_cyklus_na_kruhu(cyklus, uzly, box_struktury, cx0, cy0,
+                                                            R_kruh, uhel)
+        sipky += s_kr
+        s_sat, cary_sat = kresli_rovne_hrany(sorted(hrany_sat), uzly, box_struktury)
+        sipky += s_sat
+        cary_kruhu.update(cary_sat)
 
     # skutečný počet průsečíků v hotovém obrázku
-    def useky(pl):
-        return list(zip(pl, pl[1:]))
-    vsechny = [(i, s) for i, pl in polyline.items() for s in useky(pl)]
+    vsechny = [(i, s_) for i, pl in polyline.items() for s_ in zip(pl, pl[1:])]
     krizeni = 0
     for x in range(len(vsechny)):
-        i, (p, q) = vsechny[x]
+        i, (p, q_) = vsechny[x]
         for y in range(x + 1, len(vsechny)):
-            j, (r, t) = vsechny[y]
+            j, (r_, t) = vsechny[y]
             if i == j:
                 continue
-            for (h1, h2), (v1, v2) in (((p, q), (r, t)), ((r, t), (p, q))):
+            for (h1, h2), (v1, v2) in (((p, q_), (r_, t)), ((r_, t), (p, q_))):
                 if abs(h1[1] - h2[1]) < 1e-6 and abs(v1[0] - v2[0]) < 1e-6:
                     if (min(h1[0], h2[0]) + 1 < v1[0] < max(h1[0], h2[0]) - 1 and
                             min(v1[1], v2[1]) + 1 < h1[1] < max(v1[1], v2[1]) - 1):
                         krizeni += 1
 
     # --- popisky enzymů s kontrolou kolizí ---
-    def vzorkuj(pl):              # bod zhruba každé 4 px
+    def vzorkuj(pl):
         pts = []
         for (x0, y0), (x1, y1) in zip(pl, pl[1:]):
-            n = max(2, int((abs(x1 - x0) + abs(y1 - y0)) / 4))
-            pts += [(x0 + (x1 - x0) * t / n, y0 + (y1 - y0) * t / n) for t in range(n + 1)]
+            n_ = max(2, int((abs(x1 - x0) + abs(y1 - y0)) / 4))
+            pts += [(x0 + (x1 - x0) * t / n_, y0 + (y1 - y0) * t / n_) for t in range(n_ + 1)]
         return pts
-    mrizka = defaultdict(list)       # body šipek v mřížce 16 px (rychlé hledání kolizí)
-    for pl in polyline.values():
+    mrizka = defaultdict(list)
+    for pl in list(polyline.values()) + [c_[1] for c_ in cary_kruhu.values()]:
         for px, py in vzorkuj(pl):
             mrizka[(int(px // 16), int(py // 16))].append((px, py))
 
@@ -1828,36 +2327,15 @@ def sestav(uzly_drahy, popisky="pod"):
                         n_ += 1
         return n_
     boxy_uzlu = [(u.x - u.w / 2 - 4, u.y - u.h / 2 - 4, u.x + u.w / 2 + 4, u.y + u.h / 2 + 4)
-                 for u in uzly.values() if not u.dummy]
+                 for m, u in uzly.items() if not u.dummy and m != BLOK]
     umistene, popisky_svg = [], []
 
     def prekryv(b1, b2):
         return not (b1[2] < b2[0] or b2[2] < b1[0] or b1[3] < b2[1] or b2[3] < b1[1])
 
-    for i in sorted(range(len(REAKCE)), key=lambda i: vrstva[REAKCE[i][0]]):
-        radky = popisky_reakci[i]
-        if not radky:
-            continue
+    def umisti(radky, kandidati):
         lw = max(t.w for t, _ in radky)
         lh = sum(t.h + 1 for t, _ in radky)
-        pl = polyline[i]
-        kandidati = []            # (x středu, y horního okraje, přirážka)
-        n_us = len(pl) - 1
-        for k, ((x0, y0), (x1, y1)) in enumerate(zip(pl, pl[1:])):
-            if abs(y0 - y1) < 1e-6 and abs(x1 - x0) >= lw + 8:      # vodorovný úsek
-                pref = 0 if k == n_us - 1 else 6                     # nejradši u cíle
-                lo, hi = min(x0, x1) + lw / 2 + 4, max(x0, x1) - lw / 2 - 4 - HROT_DELKA
-                for f in (0.5, 0.0, 1.0, 0.25, 0.75):
-                    cx = lo + (hi - lo) * f
-                    kandidati.append((cx, y0 - lh - 4, pref))
-                    kandidati.append((cx, y0 + 5, pref + 3))
-            elif abs(x0 - x1) < 1e-6 and abs(y1 - y0) >= lh:         # svislý úsek
-                cy = (y0 + y1) / 2 - lh / 2
-                kandidati.append((x0 + lw / 2 + 7, cy, 10))
-                kandidati.append((x0 - lw / 2 - 7, cy, 12))
-        if not kandidati:
-            (x0, y0), (x1, y1) = pl[-2], pl[-1]
-            kandidati.append(((x0 + x1) / 2, y1 - lh - 4, 0))
         nej = None
         for cx, ytop, pref in kandidati:
             box = (cx - lw / 2 - 3, ytop - 2, cx + lw / 2 + 3, ytop + lh + 2)
@@ -1872,7 +2350,45 @@ def sestav(uzly_drahy, popisky="pod"):
             popisky_svg.append(t.path(cx - t.w / 2, ytop, barva, halo=BARVA_POZADI))
             ytop += t.h + 1
 
+    for i in sorted(klice, key=lambda i: vrstva[hrany_lay[i][0]]):
+        radky = popisky_reakci[i]
+        if not radky:
+            continue
+        lw = max(t.w for t, _ in radky)
+        lh = sum(t.h + 1 for t, _ in radky)
+        pl = polyline[i]
+        kandidati = []
+        n_us = len(pl) - 1
+        for kk, ((x0, y0), (x1, y1)) in enumerate(zip(pl, pl[1:])):
+            if abs(y0 - y1) < 1e-6 and abs(x1 - x0) >= lw + 8:
+                pref = 0 if kk == n_us - 1 else 6
+                lo, hi = min(x0, x1) + lw / 2 + 4, max(x0, x1) - lw / 2 - 4 - HROT_DELKA
+                for f in (0.5, 0.0, 1.0, 0.25, 0.75):
+                    cx = lo + (hi - lo) * f
+                    kandidati.append((cx, y0 - lh - 4, pref))
+                    kandidati.append((cx, y0 + 5, pref + 3))
+            elif abs(x0 - x1) < 1e-6 and abs(y1 - y0) >= lh:
+                cy = (y0 + y1) / 2 - lh / 2
+                kandidati.append((x0 + lw / 2 + 7, cy, 10))
+                kandidati.append((x0 - lw / 2 - 7, cy, 12))
+        if not kandidati:
+            (x0, y0), (x1, y1) = pl[-2], pl[-1]
+            kandidati.append(((x0 + x1) / 2, y1 - lh - 4, 0))
+        umisti(radky, kandidati)
+    for j, (druh, pts, ustred) in cary_kruhu.items():
+        radky = popisky_reakci[j]
+        if not radky:
+            continue
+        lw = max(t.w for t, _ in radky)
+        lh = sum(t.h + 1 for t, _ in radky)
+        if druh == "usecka":
+            umisti(radky, kandidati_popisku_usecky(pts, lw, lh))
+        else:
+            umisti(radky, kandidati_popisku_kruhu(druh, ustred, lw, lh, cx0, cy0, R_kruh, R_in, len(cyklus)))
 
+    ymax = max([ymax] + [b_[3] for b_ in umistene] + [u.y + u.h / 2 for u in uzly.values()])
+    celkova_sirka = max([celkova_sirka] + [b_[2] + OKRAJ for b_ in umistene]
+                        + [u.x + u.w / 2 + OKRAJ for u in uzly.values()])
     return dokonci_svg(uzly_drahy, uzly, data, popisky, sipky, popisky_svg, krizeni,
                        ymax, celkova_sirka)
 
@@ -2005,16 +2521,16 @@ def smery_hrany(r):
     return {(b, a)} if r[5] else {(a, b)}
 
 
-def najdi_cyklus(uzly_, hrany_smery, limit_s=2.0, min_delka=3):
-    """Nejdelší jednoduchý orientovaný cyklus (prohledávání do hloubky s časovým limitem).
-    hrany_smery: iterovatelné dvojice (z, do) ve směru reakcí."""
+def najdi_cykly(uzly_, hrany_smery, limit_s=2.0, min_delka=3, max_pocet=8):
+    """Jednoduché orientované cykly (prohledávání do hloubky s časovým limitem),
+    různé sady látek, seřazené od nejdelšího. hrany_smery: dvojice (z, do) ve směru reakcí."""
     nasl = defaultdict(set)
     for a, b in hrany_smery:
         if a != b:
             nasl[a].add(b)
     uzly_ = sorted(u for u in uzly_ if nasl[u])
     poradi_u = {u: i for i, u in enumerate(uzly_)}
-    nej = []
+    nalezene = {}
     konec_ = time.time() + limit_s
     for s0 in uzly_:                    # cyklus začínající nejmenším uzlem (bez duplicit)
         if time.time() > konec_:
@@ -2028,17 +2544,38 @@ def najdi_cyklus(uzly_, hrany_smery, limit_s=2.0, min_delka=3):
                 zasobnik.pop()
                 na_ceste.discard(cesta.pop())
                 continue
-            if v == s0 and len(cesta) >= min_delka and len(cesta) > len(nej):
-                nej = list(cesta)
+            if v == s0 and len(cesta) >= min_delka:
+                klic_ = frozenset(cesta)
+                if klic_ not in nalezene and len(nalezene) < 20000:
+                    nalezene[klic_] = list(cesta)
             elif v not in na_ceste and poradi_u.get(v, -1) > poradi_u[s0]:
                 cesta.append(v)
                 na_ceste.add(v)
                 zasobnik.append((v, iter(sorted(nasl[v]))))
-    return nej
+    return sorted(nalezene.values(), key=lambda c: (-len(c), c))[:max_pocet]
 
 
-def cyklus_v_draze(d):
-    """Nejdelší cyklus v celé načtené dráze (pro nápovědu v okně)."""
+def najdi_cyklus(uzly_, hrany_smery, limit_s=2.0, min_delka=3):
+    """Nejdelší jednoduchý orientovaný cyklus."""
+    c = najdi_cykly(uzly_, hrany_smery, limit_s, min_delka, max_pocet=1)
+    return c[0] if c else []
+
+
+def vyber_cyklus(uzly_, smery):
+    """Cyklus zvolený uživatelem (VYBRANY_CYKLUS), jinak nejdelší."""
+    if VYBRANY_CYKLUS:
+        mn = set(uzly_)
+        clen = [c for c in VYBRANY_CYKLUS if c in mn]
+        if len(clen) >= 3:
+            cs = set(clen)
+            cyk = najdi_cyklus(clen, [(a, b) for a, b in smery if a in cs and b in cs])
+            if len(cyk) >= 3:
+                return cyk
+    return najdi_cyklus(uzly_, smery)
+
+
+def cykly_v_draze(d, max_pocet=8):
+    """Cykly v celé načtené dráze (pro výběr a nápovědu v okně), od nejdelšího."""
     # přenašeče (ThPP, NAD …) se nepočítají; vázané meziprodukty ano (spojují kroky komplexu)
     uzly_ = {c for c, m in d.metabolity.items() if m.get("role", "normal") != "prenasec"}
     smery = []
@@ -2047,8 +2584,18 @@ def cyklus_v_draze(d):
             smery.append((r["a"], r["b"]))
             if r["typ"] == "<=>":
                 smery.append((r["b"], r["a"]))
-    cyk = najdi_cyklus(sorted(uzly_), smery, limit_s=1.5, min_delka=4)
-    return [c for c in cyk if d.metabolity[c].get("role", "normal") == "normal"]
+    out, videno = [], set()
+    for cyk in najdi_cykly(sorted(uzly_), smery, limit_s=1.5, min_delka=4, max_pocet=60):
+        bez = [c for c in cyk if d.metabolity[c].get("role", "normal") == "normal"]
+        if len(bez) >= 3 and frozenset(bez) not in videno:
+            videno.add(frozenset(bez))
+            out.append(bez)
+    return out[:max_pocet]
+
+
+def cyklus_v_draze(d):
+    c = cykly_v_draze(d, 1)
+    return c[0] if c else []
 
 
 def oblouk_d(cx, cy, r, a0, a1, zacatek=True):
@@ -2113,7 +2660,7 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
         if ":" in r[0] + r[1] and not (r[0].startswith("gap:") or r[1].startswith("gap:")):
             continue                              # rámečky drah do cyklu nepatří
         smery |= smery_hrany(r)
-    cyklus = najdi_cyklus([u for u in uzly_drahy if not u.startswith("map:")], smery)
+    cyklus = vyber_cyklus([u for u in uzly_drahy if not u.startswith("map:")], smery)
     if len(cyklus) < 3:
         raise ValueError("Ve vybrané části dráhy nebyl nalezen žádný cyklus (alespoň 3 látky "
                          "spojené reakcemi do kruhu).\n\nPoužij řádkové rozložení, nebo zkontroluj "
@@ -3026,7 +3573,18 @@ def spust_gui(pocatecni=None):
     radek_r = ttk.Frame(volby)
     radek_r.pack(anchor="w", pady=(0, 2))
     ttk.Radiobutton(radek_r, text="řádkové", value="radky", variable=var_rozl).pack(side="left")
-    ttk.Radiobutton(radek_r, text="kruhové (cyklus)", value="kruh", variable=var_rozl).pack(side="left", padx=8)
+    ttk.Radiobutton(radek_r, text="kompaktní", value="kompaktni", variable=var_rozl).pack(side="left", padx=6)
+    ttk.Radiobutton(radek_r, text="kruhové", value="kruh", variable=var_rozl).pack(side="left")
+    var_cyk_kruh = tk.BooleanVar(value=False)
+    ttk.Checkbutton(volby, text="cyklus jako kruh (řádkové / kompaktní)",
+                    variable=var_cyk_kruh).pack(anchor="w")
+    radek_c = ttk.Frame(volby)
+    radek_c.pack(anchor="w", fill="x")
+    ttk.Label(radek_c, text="Cyklus:").pack(side="left")
+    var_cyk_vyber = tk.StringVar(value="automaticky (nejdelší)")
+    cb_cyklus = ttk.Combobox(radek_c, textvariable=var_cyk_vyber, state="readonly", width=30,
+                             values=["automaticky (nejdelší)"])
+    cb_cyklus.pack(side="left", padx=4, fill="x", expand=True)
     var_cyklus = tk.StringVar(value="")
     ttk.Label(volby, textvariable=var_cyklus, foreground="#7b3fa0", wraplength=250).pack(anchor="w", pady=(0, 6))
     var_odkazy = tk.BooleanVar(value=True)
@@ -3165,10 +3723,17 @@ def spust_gui(pocatecni=None):
                      f"reakčních kroků ({d.zdroj_dat})" + (f"; {bez} bez struktury" if bez else ""))
         aktualizuj_pocty()
         stav["nahled_svg"] = None
-        cyk = cyklus_v_draze(d)
+        cykly = cykly_v_draze(d)
+        stav["cykly"] = cykly
+        cb_cyklus["values"] = ["automaticky (nejdelší)"] + [
+            f"{len(c)} látek: " + " → ".join(d.metabolity[x]["nazev"] for x in c[:3]) + " → …"
+            for c in cykly]
+        cb_cyklus.current(0)
+        cyk = cykly[0] if cykly else []
         if len(cyk) >= 4:
             var_cyklus.set(f"↻ Dráha obsahuje cyklus ({len(cyk)} látek: "
-                           f"{d.metabolity[cyk[0]]['nazev']} → … ) – zkus kruhové rozložení.")
+                           f"{d.metabolity[cyk[0]]['nazev']} → … ) – zkus „cyklus jako kruh“ "
+                           f"nebo kruhové rozložení.")
         else:
             var_cyklus.set("")
         if len(d.metabolity) > VELKA_MAPA:
@@ -3184,7 +3749,14 @@ def spust_gui(pocatecni=None):
                     zvyraznit=var_zvyr.get(), zkratky=var_zkr.get(),
                     glykany_atomy=var_glyk.get(), zkratit_coa=var_coa.get(),
                     vzhled=ziskej_vzhled(),
-                    nadpis=var_nadpis.get(), rozlozeni=var_rozl.get())
+                    nadpis=var_nadpis.get(), rozlozeni=var_rozl.get(),
+                    cyklus_kruh=var_cyk_kruh.get() and var_rozl.get() != "kruh",
+                    cyklus=vybrany_cyklus())
+
+    def vybrany_cyklus():
+        i_ = cb_cyklus.current()
+        cykly = stav.get("cykly") or []
+        return cykly[i_ - 1] if 1 <= i_ <= len(cykly) else None
 
     def meritko_nahledu(svg_text):
         z = var_zoom.get()
@@ -3332,6 +3904,12 @@ def main():
     ap.add_argument("--bez-genu", action="store_true", help="bez názvů genů u enzymů")
     ap.add_argument("--zvyraznit", action="store_true", help="enzymy organismu zeleně")
     ap.add_argument("--kruh", action="store_true", help="kruhové rozložení (cyklické dráhy)")
+    ap.add_argument("--kompaktni", action="store_true",
+                    help="kompaktní rozložení – zalomení do pásů, obrázek blízko čtverci")
+    ap.add_argument("--cyklus", default="",
+                    help="látky cyklu pro kruh (C-čísla oddělená čárkou), jinak nejdelší cyklus")
+    ap.add_argument("--cyklus-kruh", action="store_true",
+                    help="nejdelší cyklus nakreslit jako kruh uvnitř řádkového/kompaktního rozložení")
     ap.add_argument("--predvolba", choices=list(PREDVOLBY), default=None, help="předvolba vzhledu")
     ap.add_argument("--vzhled", default=None,
                     help="soubor s nastavením vzhledu (JSON, např. nastaveni_vzhledu.json z okna)")
@@ -3382,7 +3960,9 @@ def main():
                          zvyraznit=args.zvyraznit, glykany_atomy=args.glykany_atomy,
                          zkratit_coa=not args.plne_coa, delka_vazby=args.delka_vazby,
                          velikost_atomu=args.velikost_atomu, nadpis=args.nadpis,
-                         rozlozeni="kruh" if args.kruh else "radky", vzhled=vzhled)
+                         rozlozeni="kruh" if args.kruh else ("kompaktni" if args.kompaktni else "radky"),
+                         vzhled=vzhled, cyklus_kruh=args.cyklus_kruh,
+                         cyklus=[x.strip() for x in args.cyklus.split(",") if x.strip()])
     print(f"Uloženo: {vystup}   ({n} uzlů, křížení šipek: {kriz})")
     for fmt in ("png", "pdf", "emf"):
         if getattr(args, fmt):
