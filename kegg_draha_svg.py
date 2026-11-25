@@ -50,7 +50,12 @@ from matplotlib.textpath import TextPath
 from matplotlib.font_manager import FontProperties
 
 RDLogger.DisableLog("rdApp.*")
-SLOZKA = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):          # zabalená aplikace (.exe z PyInstalleru)
+    SLOZKA = os.path.dirname(sys.executable)
+    ZDROJE = getattr(sys, "_MEIPASS", SLOZKA)
+else:
+    SLOZKA = os.path.dirname(os.path.abspath(__file__))
+    ZDROJE = SLOZKA
 
 # =============================================================================
 # 1) VESTAVĚNÉ ZNALOSTI (české názvy, SMILES, kompletní map00360)
@@ -736,9 +741,10 @@ def priprav_graf(d, vybrane_met, vybrane_rx, start=None, otocene=(), odkazy=True
 def vytvor_svg(d, vybrane_met, vybrane_rx, vystup, start=None, otocene=(), popisky="pod",
                odkazy=True, geny=True, zvyraznit=False, zkratky=True, nadpis=None,
                glykany_atomy=False, zkratit_coa=True, delka_vazby=None, velikost_atomu=None,
-               rozlozeni="radky"):
+               rozlozeni="radky", vzhled=None):
     """Hlavní funkce: z výběru vytvoří SVG soubor. Vrací (počet uzlů, počet křížení)."""
     global NADPIS, PODNADPIS, ORGANISMUS, ZVYRAZNIT, ZKRACOVAT_COA, DELKA_VAZBY, FONT_ATOMU
+    pouzij_vzhled(vzhled)
     ZVYRAZNIT = zvyraznit
     ZKRACOVAT_COA = zkratit_coa
     if delka_vazby:
@@ -808,6 +814,94 @@ BARVA_EC = "#555555"
 BARVA_NAZEV = "#111111"
 BARVA_ORG = "#1b7a3a"     # jen při volbě „zvýraznit enzymy organismu“
 BARVA_ZKRATKA = "#7b3fa0" # šipka přes vynechané metabolity
+BARVA_POZADI = "#ffffff"
+BARVA_NADPIS = "#111111"
+BARVA_POPIS = "#555555"   # podnadpis, poznámky, legenda
+BARVA_VAZEB = "#000000"   # vazby a uhlíky ve strukturách
+BAREVNE_ATOMY = True      # O červeně, N modře … (jinak vše barvou vazeb)
+BARVA_VYCHOZI = "#fff4dc"
+BARVA_VYCHOZI_OBRYS = "#e0a43a"
+BARVA_MAPY = "#f4f7fb"
+BARVA_MAPY_OBRYS = "#4a6fa5"
+BARVA_MAPY_TEXT = "#1f3a60"
+BARVA_MEZERY = "#faf6fd"  # výplň rámečku vynechaných kroků
+TVAR_HROTU = "plny"       # plny | trojuhelnik | otevreny
+TLOUSTKA_SIPEK = 1.3
+ZAOBLENI_RAMECKU = 10
+
+
+# --- Předvolby vzhledu a jejich použití ---------------------------------------
+VYCHOZI_VZHLED = dict(
+    font="DejaVu Sans", barva_pozadi="#ffffff", barva_nadpisu="#111111", barva_popisu="#555555",
+    barva_sipek="#3a3a3a", barva_nazvu="#111111", barva_genu="#222222", barva_ec="#555555",
+    barva_vazeb="#000000", barevne_atomy=True, barva_vychozi="#fff4dc", barva_vychozi_obrys="#e0a43a",
+    barva_mapy="#f4f7fb", barva_mapy_obrys="#4a6fa5", barva_mapy_text="#1f3a60",
+    barva_zkratky="#7b3fa0", barva_mezery="#faf6fd", barva_org="#1b7a3a",
+    hrot="plny", tloustka=1.3, velikost_hrotu=9.0, polomer_rohu=4.0, zaobleni_ramecku=10.0,
+    delka_vazby=20.0, velikost_atomu=0.5, pismo_nazvu=12.5, pismo_enzymu=10.5, rozestup=1.0,
+)
+PREDVOLBY = {
+    "Klasický": {},
+    "Barevný": dict(barva_sipek="#2f5d8a", barva_genu="#1f4e8c", barva_ec="#5b6f86",
+                    barva_vychozi="#e6f2ff", barva_vychozi_obrys="#3b82c4",
+                    barva_mapy="#fff4e0", barva_mapy_obrys="#e08a1e", barva_mapy_text="#8a4b00",
+                    barva_zkratky="#c2185b", barva_mezery="#fdf0f5", hrot="trojuhelnik"),
+    "Černobílý (tisk)": dict(barva_sipek="#000000", barva_genu="#000000", barva_ec="#333333",
+                             barva_popisu="#333333", barevne_atomy=False, barva_vychozi="#f0f0f0",
+                             barva_vychozi_obrys="#000000", barva_mapy="#ffffff", barva_mapy_obrys="#000000",
+                             barva_mapy_text="#000000", barva_zkratky="#555555", barva_mezery="#ffffff",
+                             barva_org="#000000", tloustka=1.1),
+    "Tmavý": dict(barva_pozadi="#1e2026", barva_nadpisu="#f2f2f2", barva_popisu="#a9adb5",
+                  barva_sipek="#c9ccd2", barva_nazvu="#f0f0f0", barva_genu="#e6e6e6", barva_ec="#a9adb5",
+                  barva_vazeb="#e8e8e8", barva_vychozi="#3a3324", barva_vychozi_obrys="#e0a43a",
+                  barva_mapy="#2a3140", barva_mapy_obrys="#7d9cd1", barva_mapy_text="#c9d7f0",
+                  barva_zkratky="#c792ea", barva_mezery="#2e2536", barva_org="#6fd38f"),
+}
+
+
+def pouzij_vzhled(v=None):
+    """Nastaví globální proměnné vzhledu ze slovníku (chybějící klíče = výchozí)."""
+    global FONT, BARVA_POZADI, BARVA_NADPIS, BARVA_POPIS, BARVA_SIPKY, BARVA_NAZEV, BARVA_GEN, BARVA_EC
+    global BARVA_VAZEB, BAREVNE_ATOMY, BARVA_VYCHOZI, BARVA_VYCHOZI_OBRYS, BARVA_MAPY, BARVA_MAPY_OBRYS
+    global BARVA_MAPY_TEXT, BARVA_ZKRATKA, BARVA_MEZERY, BARVA_ORG, TVAR_HROTU, TLOUSTKA_SIPEK
+    global HROT_DELKA, HROT_SIRKA, POLOMER_ROHU, ZAOBLENI_RAMECKU, DELKA_VAZBY, FONT_ATOMU
+    global VEL_NAZEV, VEL_GEN, VEL_EC, VEL_MAPA, MEZERA_SVISLE, MIN_MEZERA_VRSTEV, ROZESTUP_KOLEJI
+    z = dict(VYCHOZI_VZHLED)
+    z.update({k: val for k, val in (v or {}).items() if k in VYCHOZI_VZHLED})
+    FONT = z["font"]
+    BARVA_POZADI, BARVA_NADPIS, BARVA_POPIS = z["barva_pozadi"], z["barva_nadpisu"], z["barva_popisu"]
+    BARVA_SIPKY, BARVA_NAZEV, BARVA_GEN, BARVA_EC = z["barva_sipek"], z["barva_nazvu"], z["barva_genu"], z["barva_ec"]
+    BARVA_VAZEB, BAREVNE_ATOMY = z["barva_vazeb"], bool(z["barevne_atomy"])
+    BARVA_VYCHOZI, BARVA_VYCHOZI_OBRYS = z["barva_vychozi"], z["barva_vychozi_obrys"]
+    BARVA_MAPY, BARVA_MAPY_OBRYS, BARVA_MAPY_TEXT = z["barva_mapy"], z["barva_mapy_obrys"], z["barva_mapy_text"]
+    BARVA_ZKRATKA, BARVA_MEZERY, BARVA_ORG = z["barva_zkratky"], z["barva_mezery"], z["barva_org"]
+    TVAR_HROTU = z["hrot"]
+    TLOUSTKA_SIPEK = float(z["tloustka"])
+    HROT_DELKA = float(z["velikost_hrotu"])
+    HROT_SIRKA = HROT_DELKA * 0.4
+    POLOMER_ROHU = float(z["polomer_rohu"])
+    ZAOBLENI_RAMECKU = float(z["zaobleni_ramecku"])
+    DELKA_VAZBY = float(z["delka_vazby"])
+    FONT_ATOMU = float(z["velikost_atomu"])
+    VEL_NAZEV = float(z["pismo_nazvu"])
+    VEL_GEN = float(z["pismo_enzymu"])
+    VEL_EC = VEL_GEN * 0.81
+    VEL_MAPA = VEL_GEN
+    MEZERA_SVISLE = 34 * float(z["rozestup"])
+    MIN_MEZERA_VRSTEV = 120 * float(z["rozestup"])
+    ROZESTUP_KOLEJI = max(7.0, 11 * min(1.3, float(z["rozestup"])), TLOUSTKA_SIPEK * 2 + ROZESTUP_VRATNE * 2 + 3)
+
+
+def nacti_vzhled_ze_souboru(cesta):
+    import json
+    with open(cesta, encoding="utf-8") as f:
+        return {k: v for k, v in json.load(f).items() if k in VYCHOZI_VZHLED}
+
+
+def tmave_pozadi():
+    from matplotlib.colors import to_rgb
+    r, g, b = to_rgb(BARVA_POZADI)
+    return 0.299 * r + 0.587 * g + 0.114 * b < 0.5
 
 
 # =============================================================================
@@ -928,7 +1022,7 @@ def parsuj_kcf(txt):
 def symbol_cukru(tvar, barva, x, y, r):
     """SVG cesty jednoho symbolu SNFG se středem (x, y)."""
     f = _fmt
-    obrys = 'stroke="#111111" stroke-width="0.9" stroke-linejoin="round"'
+    obrys = f'stroke="{BARVA_VAZEB}" stroke-width="0.9" stroke-linejoin="round"'
     if tvar == "kruh":
         d = f"M{f(x - r)},{f(y)} a{f(r)},{f(r)} 0 1,0 {f(2 * r)},0 a{f(r)},{f(r)} 0 1,0 {f(-2 * r)},0 Z"
         return f'<path d="{d}" fill="{barva}" {obrys}/>'
@@ -982,13 +1076,13 @@ def nakresli_glykan(kcf):
         if dite in pos and rodic in pos:
             (ax, ay), (bx, by) = pos[dite], pos[rodic]
             out.append(f'<path d="M{_fmt(ax)},{_fmt(ay)} L{_fmt(bx)},{_fmt(by)}" '
-                       f'stroke="#222222" stroke-width="1"/>')
+                       f'stroke="{BARVA_VAZEB}" stroke-width="1"/>')
     for dite, rodic, popis in hrany_:          # popisky vazeb (α2-3 …)
         if popis and dite in pos and rodic in pos:
             (ax, ay), (bx, by) = pos[dite], pos[rodic]
             t = Text(popis, 6.3)
             mx, my = ax + (bx - ax) * 0.42, ay + (by - ay) * 0.42
-            out.append(t.path(mx - t.w / 2, my - t.h - 2, "#444444", halo="#ffffff"))
+            out.append(t.path(mx - t.w / 2, my - t.h - 2, BARVA_EC, halo=BARVA_POZADI))
     for i, (zb, _, _) in uzly_.items():        # symboly / text
         x, y = pos[i]
         if zb in SNFG:
@@ -996,7 +1090,7 @@ def nakresli_glykan(kcf):
             out.append(symbol_cukru(*SNFG[zb], x, y, r))
         else:
             t = texty[i]
-            out.append(t.path(x - t.w / 2, y - t.h / 2, "#111111", halo="#ffffff"))
+            out.append(t.path(x - t.w / 2, y - t.h / 2, BARVA_NAZEV, halo=BARVA_POZADI))
     return w, h, "".join(out)
 
 
@@ -1074,6 +1168,18 @@ def nakresli_strukturu(zdroj):
     d = rdMolDraw2D.MolDraw2DSVG(-1, -1)       # plátno dle velikosti molekuly
     o = d.drawOptions()
     o.fixedBondLength = DELKA_VAZBY
+    from matplotlib.colors import to_rgb
+    cv = to_rgb(BARVA_VAZEB)
+    if not BAREVNE_ATOMY:
+        o.useBWAtomPalette()
+        o.updateAtomPalette({k: cv for k in (-1, 1, 5, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 19, 20,
+                                               26, 29, 30, 34, 35, 53)})
+    else:
+        paleta = {-1: cv, 1: cv, 6: cv}
+        if tmave_pozadi():                 # na tmavém pozadí světlejší heteroatomy
+            paleta.update({7: (0.45, 0.66, 1.0), 8: (1.0, 0.45, 0.45), 16: (0.95, 0.85, 0.3),
+                           15: (1.0, 0.65, 0.3)})
+        o.updateAtomPalette(paleta)
     o.baseFontSize = FONT_ATOMU
     o.bondLineWidth = TLOUSTKA_VAZBY
     o.scaleBondWidth = False
@@ -1268,18 +1374,14 @@ def posun_lomene(pl, o):
 
 
 def hrot(tip, smer, pul=None, barva=None):
-    """Hrot šipky jako vyplněná cesta. smer = +1 (doprava) / -1 (doleva).
+    """Hrot vodorovné šipky. smer = +1 (doprava) / -1 (doleva);
     pul = None (celý), 'nahore', 'dole' (poloviční hrot)."""
-    x, y = tip
-    bx = x - smer * HROT_DELKA
-    if pul is None:
-        pts = [(x, y), (bx, y - HROT_SIRKA), (bx + smer * 2.0, y), (bx, y + HROT_SIRKA)]
-    elif pul == "nahore":
-        pts = [(x, y), (bx, y - HROT_SIRKA * 1.4), (bx, y)]
-    else:
-        pts = [(x, y), (bx, y + HROT_SIRKA * 1.4), (bx, y)]
-    d = "M" + " L".join("%s,%s" % (_fmt(a), _fmt(b)) for a, b in pts) + " Z"
-    return f'<path d="{d}" fill="{barva or BARVA_SIPKY}"/>'
+    strana = None
+    if pul == "nahore":
+        strana = "vlevo" if smer > 0 else "vpravo"
+    elif pul == "dole":
+        strana = "vpravo" if smer > 0 else "vlevo"
+    return hrot_smer(tip, float(smer), 0.0, strana, barva)
 
 
 def y_na_krivce(segs, x):
@@ -1335,7 +1437,7 @@ def popisek_reakce(geny, ec, pritomna, vedl, zkratka=0):
     for j in range(0, len(pol), 4):
         radky.append((Text(" · ".join(pol[j:j + 4]), VEL_EC), BARVA_ORG if zelena else BARVA_EC))
     if vedl:
-        radky.append((Text(vedl, VEL_EC, style="italic"), "#555555"))
+        radky.append((Text(vedl, VEL_EC, style="italic"), BARVA_POPIS))
     return radky
 
 
@@ -1350,10 +1452,11 @@ def priprav_data_uzlu(uzly_drahy, popisky="pod"):
             bw = max(t.w for t in radky) + 24
             bh = sum(t.h + 2 for t in radky) + 14
             body = [f'<rect x="0.6" y="0.6" width="{_fmt(bw - 1.2)}" height="{_fmt(bh - 1.2)}" '
-                    f'rx="{_fmt(min(14, bh / 2))}" fill="#f4f7fb" stroke="#4a6fa5" stroke-width="1.2"/>']
+                    f'rx="{_fmt(min(ZAOBLENI_RAMECKU * 1.4, bh / 2))}" fill="{BARVA_MAPY}" '
+                    f'stroke="{BARVA_MAPY_OBRYS}" stroke-width="1.2"/>']
             yy = 7
             for j, t in enumerate(radky):
-                barva = "#6b7f99" if j == len(radky) - 1 else "#1f3a60"
+                barva = BARVA_MAPY_OBRYS if j == len(radky) - 1 else BARVA_MAPY_TEXT
                 body.append(t.path((bw - t.w) / 2, yy, barva))
                 yy += t.h + 2
             data[mid] = dict(sw=bw, sh=bh, body="".join(body), t_n=None, t_p=[], w=bw, h=bh)
@@ -1364,11 +1467,11 @@ def priprav_data_uzlu(uzly_drahy, popisky="pod"):
                 jmena = jmena[:6] + [f"… (+{len(jmena) - 6})"]
             radky = [(Text("⋯ " + cesky_vynechano(len(MEZERY[mid])), VEL_EC + 1.5,
                            weight="bold", style="italic"), BARVA_ZKRATKA)]
-            radky += [(Text(r_, VEL_EC), "#6a5a78") for r_ in zalom(jmena)]
+            radky += [(Text(r_, VEL_EC), BARVA_POPIS) for r_ in zalom(jmena)]
             bw = max(t.w for t, _ in radky) + 22
             bh = sum(t.h + 2 for t, _ in radky) + 12
             body = [f'<rect x="0.6" y="0.6" width="{_fmt(bw - 1.2)}" height="{_fmt(bh - 1.2)}" '
-                    f'rx="8" fill="#faf6fd" stroke="{BARVA_ZKRATKA}" stroke-width="1.1" '
+                    f'rx="{_fmt(ZAOBLENI_RAMECKU * 0.8)}" fill="{BARVA_MEZERY}" stroke="{BARVA_ZKRATKA}" stroke-width="1.1" '
                     f'stroke-dasharray="4 3"/>']
             yy = 6
             for t, barva in radky:
@@ -1381,7 +1484,7 @@ def priprav_data_uzlu(uzly_drahy, popisky="pod"):
         if st is None:      # struktura není k dispozici -> jen rámeček
             sw, sh = 70.0, 34.0
             body = ('<rect x="1" y="1" width="68" height="32" rx="6" fill="none" '
-                    'stroke="#999" stroke-dasharray="3 3"/>')
+                    f'stroke="{BARVA_POPIS}" stroke-dasharray="3 3"/>')
         else:
             sw, sh, body = st
         t_n = Text(nazev, VEL_NAZEV, weight="bold")
@@ -1661,12 +1764,12 @@ def sestav(uzly_drahy, popisky="pod"):
     sipky = []
     for i, (a, b, geny, ec, vratna, zpet, pritomna, vedl, carkovana, zkratka) in enumerate(REAKCE):
         if zkratka:                 # vynechané kroky: tečkovaná fialová šipka
-            barva, sirka = BARVA_ZKRATKA, 1.7
+            barva, sirka = BARVA_ZKRATKA, TLOUSTKA_SIPEK * 1.3
             carky = ' stroke-dasharray="0.1 4.5" stroke-linecap="round"'
         else:
             zelena = pritomna and ZVYRAZNIT
             barva = BARVA_ORG if zelena else BARVA_SIPKY
-            sirka = 1.8 if zelena else 1.3
+            sirka = TLOUSTKA_SIPEK * 1.4 if zelena else TLOUSTKA_SIPEK
             carky = ' stroke-dasharray="5 4"' if carkovana else ''
 
         def kresli(pl, dopredu, pul):
@@ -1766,7 +1869,7 @@ def sestav(uzly_drahy, popisky="pod"):
         _, cx, ytop, box = nej
         umistene.append(box)
         for t, barva in radky:
-            popisky_svg.append(t.path(cx - t.w / 2, ytop, barva, halo="#ffffff"))
+            popisky_svg.append(t.path(cx - t.w / 2, ytop, barva, halo=BARVA_POZADI))
             ytop += t.h + 1
 
 
@@ -1788,13 +1891,13 @@ def dokonci_svg(uzly_drahy, uzly, data, popisky, sipky, popisky_svg, krizeni, ym
         u = uzly[m]
         pad = 9
         rect = (f'x="{_fmt(u.x - u.w/2 - pad)}" y="{_fmt(u.y - u.h/2 - pad)}" '
-                f'width="{_fmt(u.w + 2*pad)}" height="{_fmt(u.h + 2*pad)}" rx="10"')
+                f'width="{_fmt(u.w + 2*pad)}" height="{_fmt(u.h + 2*pad)}" rx="{_fmt(ZAOBLENI_RAMECKU)}"')
         if ":" in m:
             continue
         if m == VYCHOZI:
-            pozadi.append(f'<rect {rect} fill="#fff4dc" stroke="#e0a43a" stroke-width="1.2"/>')
+            pozadi.append(f'<rect {rect} fill="{BARVA_VYCHOZI}" stroke="{BARVA_VYCHOZI_OBRYS}" stroke-width="1.2"/>')
         elif METABOLITY[m][2]:
-            pozadi.append(f'<rect {rect} fill="none" stroke="#8a8a8a" stroke-width="1" '
+            pozadi.append(f'<rect {rect} fill="none" stroke="{BARVA_POPIS}" stroke-width="1" '
                           f'stroke-dasharray="5 4"/>')
 
     # --- struktury a názvy ---
@@ -1816,23 +1919,24 @@ def dokonci_svg(uzly_drahy, uzly, data, popisky, sipky, popisky_svg, krizeni, ym
         ly += t_n.h + 3
         for t in t_p:
             px = lx if popisky == "vpravo" else u.x - t.w / 2
-            struktury.append(t.path(px, ly, "#555555"))
+            struktury.append(t.path(px, ly, BARVA_POPIS))
             ly += t.h + 2
 
     # --- nadpis a legenda ---
     t1 = Text(NADPIS, VEL_NADPIS, weight="bold")
     t2 = Text(PODNADPIS, VEL_PODNADPIS)
-    hlavicka = [t1.path(OKRAJ, OKRAJ - 8, "#111111"), t2.path(OKRAJ, OKRAJ - 8 + t1.h + 4, "#666666")]
+    hlavicka = [t1.path(OKRAJ, OKRAJ - 8, BARVA_NADPIS), t2.path(OKRAJ, OKRAJ - 8 + t1.h + 4, BARVA_POPIS)]
 
     ly = ymax + 40
     leg, lx = [], OKRAJ
 
     def leg_text(t_, x):
         t = Text(t_, VEL_EC + 1.5)
-        leg.append(t.path(x, ly - t.h / 2, "#333333"))
+        leg.append(t.path(x, ly - t.h / 2, BARVA_POPIS))
         return x + t.w + 34
 
-    def leg_cara(x, barva, sirka=1.3, styl=""):
+    def leg_cara(x, barva, sirka=None, styl=""):
+        sirka = sirka or TLOUSTKA_SIPEK
         leg.append(f'<path d="M{x},{ly} L{x+40},{ly}" fill="none" stroke="{barva}" '
                    f'stroke-width="{sirka}"{styl}/>')
         leg.append(hrot((x + 48, ly), 1, None, barva))
@@ -1840,25 +1944,25 @@ def dokonci_svg(uzly_drahy, uzly, data, popisky, sipky, popisky_svg, krizeni, ym
 
     lx = leg_text("nevratná reakce", leg_cara(lx, BARVA_SIPKY))
     o = ROZESTUP_VRATNE
-    leg.append(f'<path d="M{lx},{_fmt(ly-o)} L{lx+40},{_fmt(ly-o)}" stroke="{BARVA_SIPKY}" stroke-width="1.3"/>')
+    leg.append(f'<path d="M{lx},{_fmt(ly-o)} L{lx+40},{_fmt(ly-o)}" stroke="{BARVA_SIPKY}" stroke-width="{TLOUSTKA_SIPEK}"/>')
     leg.append(hrot((lx + 48, ly - o), 1, "nahore", BARVA_SIPKY))
-    leg.append(f'<path d="M{lx+8},{_fmt(ly+o)} L{lx+48},{_fmt(ly+o)}" stroke="{BARVA_SIPKY}" stroke-width="1.3"/>')
+    leg.append(f'<path d="M{lx+8},{_fmt(ly+o)} L{lx+48},{_fmt(ly+o)}" stroke="{BARVA_SIPKY}" stroke-width="{TLOUSTKA_SIPEK}"/>')
     leg.append(hrot((lx, ly + o), -1, "dole", BARVA_SIPKY))
     lx = leg_text("vratná reakce", lx + 56)
     if any(r[8] and ":" not in r[0] + r[1] for r in REAKCE):
         lx = leg_text("enzym neznámý / spontánní",
-                      leg_cara(lx, BARVA_SIPKY, 1.3, ' stroke-dasharray="5 4"'))
+                      leg_cara(lx, BARVA_SIPKY, TLOUSTKA_SIPEK, ' stroke-dasharray="5 4"'))
     if any(r[9] for r in REAKCE):
         lx = leg_text("vynechané kroky (rámeček uvádí skryté metabolity)",
-                      leg_cara(lx, BARVA_ZKRATKA, 1.7,
+                      leg_cara(lx, BARVA_ZKRATKA, TLOUSTKA_SIPEK * 1.3,
                                ' stroke-dasharray="0.1 4.5" stroke-linecap="round"'))
     if ZVYRAZNIT and any(r[6] for r in REAKCE):
-        lx = leg_text(f"enzym přítomný v organismu {ORGANISMUS}", leg_cara(lx, BARVA_ORG, 1.8))
+        lx = leg_text(f"enzym přítomný v organismu {ORGANISMUS}", leg_cara(lx, BARVA_ORG, TLOUSTKA_SIPEK * 1.4))
     if any(u.startswith("map:") for u in uzly_drahy):
         tm = Text("Dráha", VEL_MAPA)
         leg.append(f'<rect x="{lx}" y="{_fmt(ly - 10)}" width="{_fmt(tm.w + 20)}" height="20" rx="10" '
-                   f'fill="#f4f7fb" stroke="#4a6fa5" stroke-width="1.2"/>')
-        leg.append(tm.path(lx + 10, ly - tm.h / 2, "#1f3a60"))
+                   f'fill="{BARVA_MAPY}" stroke="{BARVA_MAPY_OBRYS}" stroke-width="1.2"/>')
+        leg.append(tm.path(lx + 10, ly - tm.h / 2, BARVA_MAPY_TEXT))
         lx = leg_text("navazující metabolická dráha", lx + tm.w + 30)
     for cukr in sorted(POUZITE_CUKRY):          # legenda symbolů SNFG
         leg.append(symbol_cukru(*SNFG[cukr], lx + 7, ly, GLYKAN_SYMBOL))
@@ -1878,7 +1982,7 @@ def dokonci_svg(uzly_drahy, uzly, data, popisky, sipky, popisky_svg, krizeni, ym
         f'<svg xmlns="http://www.w3.org/2000/svg" version="1.1" '
         f'width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
         f'<title>{NADPIS}</title>',
-        f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>',
+        f'<rect x="0" y="0" width="{W}" height="{H}" fill="{BARVA_POZADI}"/>',
         '<g id="pozadi">', *pozadi, '</g>',
         '<g id="sipky">', *sipky, '</g>',
         '<g id="struktury">', *struktury, '</g>',
@@ -1967,17 +2071,35 @@ def oblouk_d(cx, cy, r, a0, a1, zacatek=True):
 
 def hrot_smer(tip, ux, uy, pul=None, barva=None):
     """Hrot šipky v libovolném směru (ux, uy = jednotkový směr jízdy).
-    pul = None (celý), "vlevo" (poloviční hrot na levé straně vzhledem ke směru jízdy)."""
+    pul = None (celý), "vlevo" / "vpravo" (poloviční hrot na dané straně vzhledem ke směru).
+    Tvar podle TVAR_HROTU: plny (se zářezem), trojuhelnik, otevreny (čárový)."""
+    barva = barva or BARVA_SIPKY
     x, y = tip
     nx, ny = uy, -ux                      # levá normála
+    if pul == "vpravo":
+        nx, ny = -nx, -ny
     bx, by = x - ux * HROT_DELKA, y - uy * HROT_DELKA
+    f = _fmt
+    if TVAR_HROTU == "otevreny":
+        if pul is None:
+            d = (f"M{f(bx + nx * HROT_SIRKA)},{f(by + ny * HROT_SIRKA)} L{f(x)},{f(y)} "
+                 f"L{f(bx - nx * HROT_SIRKA)},{f(by - ny * HROT_SIRKA)} M{f(bx)},{f(by)} L{f(x)},{f(y)}")
+        else:
+            d = (f"M{f(bx + nx * HROT_SIRKA * 1.4)},{f(by + ny * HROT_SIRKA * 1.4)} L{f(x)},{f(y)} "
+                 f"M{f(bx)},{f(by)} L{f(x)},{f(y)}")
+        return (f'<path d="{d}" fill="none" stroke="{barva}" stroke-width="{f(TLOUSTKA_SIPEK)}" '
+                f'stroke-linecap="round" stroke-linejoin="round"/>')
     if pul is None:
-        pts = [(x, y), (bx + nx * HROT_SIRKA, by + ny * HROT_SIRKA),
-               (bx + ux * 2.0, by + uy * 2.0), (bx - nx * HROT_SIRKA, by - ny * HROT_SIRKA)]
+        if TVAR_HROTU == "trojuhelnik":
+            pts = [(x, y), (bx + nx * HROT_SIRKA, by + ny * HROT_SIRKA), (bx - nx * HROT_SIRKA, by - ny * HROT_SIRKA)]
+        else:
+            pts = [(x, y), (bx + nx * HROT_SIRKA, by + ny * HROT_SIRKA),
+                   (bx + ux * HROT_DELKA * 0.22, by + uy * HROT_DELKA * 0.22),
+                   (bx - nx * HROT_SIRKA, by - ny * HROT_SIRKA)]
     else:
         pts = [(x, y), (bx + nx * HROT_SIRKA * 1.4, by + ny * HROT_SIRKA * 1.4), (bx, by)]
-    d = "M" + " L".join("%s,%s" % (_fmt(a), _fmt(b)) for a, b in pts) + " Z"
-    return f'<path d="{d}" fill="{barva or BARVA_SIPKY}"/>'
+    d = "M" + " L".join("%s,%s" % (f(a), f(b)) for a, b in pts) + " Z"
+    return f'<path d="{d}" fill="{barva}"/>'
 
 
 def sestav_kruh(uzly_drahy, popisky="pod"):
@@ -2164,9 +2286,9 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
     def styl(r):
         a, b, geny, ec, vratna, zpet, pritomna, vedl, carkovana, zkratka = r
         if zkratka:
-            return BARVA_ZKRATKA, 1.7, ' stroke-dasharray="0.1 4.5" stroke-linecap="round"'
+            return BARVA_ZKRATKA, TLOUSTKA_SIPEK * 1.3, ' stroke-dasharray="0.1 4.5" stroke-linecap="round"'
         zel = pritomna and ZVYRAZNIT
-        return (BARVA_ORG if zel else BARVA_SIPKY, 1.8 if zel else 1.3,
+        return (BARVA_ORG if zel else BARVA_SIPKY, TLOUSTKA_SIPEK * 1.4 if zel else TLOUSTKA_SIPEK,
                 ' stroke-dasharray="5 4"' if carkovana else '')
 
     # a) hrany po kružnici mezi sousedy v cyklu
@@ -2376,7 +2498,7 @@ def sestav_kruh(uzly_drahy, popisky="pod"):
         _, cxl, ytop, box = nej
         umistene.append(box)
         for t, barva in radky:
-            popisky_svg.append(t.path(cxl - t.w / 2, ytop, barva, halo="#ffffff"))
+            popisky_svg.append(t.path(cxl - t.w / 2, ytop, barva, halo=BARVA_POZADI))
             ytop += t.h + 1
 
     # skutečná křížení rovných čar (oblouky cyklu se nekříží)
@@ -2613,6 +2735,12 @@ def spust_gui(pocatecni=None):
     ANO, NE = "☑", "☐"
     okno = tk.Tk()
     okno.title("KEGG dráha → SVG")
+    ikona = os.path.join(ZDROJE, "assets", "ikona.ico")
+    if os.path.exists(ikona):
+        try:
+            okno.iconbitmap(ikona)
+        except tk.TclError:
+            pass
     okno.geometry("1220x820")
     try:
         okno.tk.call("tk", "scaling", 1.25)
@@ -2684,6 +2812,129 @@ def spust_gui(pocatecni=None):
     # karta Reakce
     k_rx = ttk.Frame(karty, padding=4)
     karty.add(k_rx, text="Reakce")
+
+    # karta Vzhled
+    from tkinter import colorchooser
+    k_vz = ttk.Frame(karty, padding=8)
+    karty.add(k_vz, text="Vzhled")
+    SOUBOR_VZHLEDU = os.path.join(SLOZKA, "nastaveni_vzhledu.json")
+    vz_vars = {}
+    vz_vzorky = {}
+    levy = ttk.LabelFrame(k_vz, text="Barvy (klikni na čtvereček)", padding=8)
+    levy.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+    pravy = ttk.Frame(k_vz)
+    pravy.grid(row=0, column=1, sticky="nsew")
+    k_vz.columnconfigure(0, weight=1)
+    k_vz.columnconfigure(1, weight=1)
+    BARVY_GUI = [
+        ("barva_pozadi", "pozadí obrázku"), ("barva_sipek", "šipky"), ("barva_nazvu", "názvy látek"),
+        ("barva_genu", "geny u enzymů"), ("barva_ec", "EC čísla"), ("barva_vazeb", "vazby ve strukturách"),
+        ("barva_nadpisu", "nadpis"), ("barva_popisu", "popisky, legenda"),
+        ("barva_vychozi", "výchozí látka – výplň"), ("barva_vychozi_obrys", "výchozí látka – obrys"),
+        ("barva_mapy", "navazující dráha – výplň"), ("barva_mapy_obrys", "navazující dráha – obrys"),
+        ("barva_mapy_text", "navazující dráha – text"), ("barva_zkratky", "vynechané kroky – čára"),
+        ("barva_mezery", "vynechané kroky – výplň"), ("barva_org", "enzymy organismu (zvýraznění)"),
+    ]
+
+    def vyber_barvu(klic):
+        puv = vz_vars[klic].get()
+        nova = colorchooser.askcolor(color=puv, title="Vyber barvu", parent=okno)[1]
+        if nova:
+            vz_vars[klic].set(nova)
+            vz_vzorky[klic].configure(background=nova)
+
+    for i, (klic, popis) in enumerate(BARVY_GUI):
+        vz_vars[klic] = tk.StringVar(value=VYCHOZI_VZHLED[klic])
+        vz = tk.Label(levy, width=3, relief="solid", borderwidth=1, background=VYCHOZI_VZHLED[klic],
+                      cursor="hand2")
+        vz.grid(row=i, column=0, padx=(0, 8), pady=2, sticky="w")
+        vz.bind("<Button-1>", lambda e, k_=klic: vyber_barvu(k_))
+        vz_vzorky[klic] = vz
+        ttk.Label(levy, text=popis).grid(row=i, column=1, sticky="w")
+    vz_vars["barevne_atomy"] = tk.BooleanVar(value=True)
+    ttk.Checkbutton(levy, text="barevné atomy (O červeně, N modře …)",
+                    variable=vz_vars["barevne_atomy"]).grid(row=len(BARVY_GUI), column=0, columnspan=2,
+                                                            sticky="w", pady=(6, 0))
+
+    ram_p = ttk.LabelFrame(pravy, text="Předvolba", padding=8)
+    ram_p.pack(fill="x")
+    var_predvolba = tk.StringVar(value="Klasický")
+    ttk.Combobox(ram_p, textvariable=var_predvolba, values=list(PREDVOLBY), state="readonly",
+                 width=20).pack(side="left")
+    ttk.Button(ram_p, text="Použít", command=lambda: nastav_vzhled_gui(
+        {**VYCHOZI_VZHLED, **PREDVOLBY[var_predvolba.get()]})).pack(side="left", padx=6)
+
+    ram_t = ttk.LabelFrame(pravy, text="Tvary", padding=8)
+    ram_t.pack(fill="x", pady=6)
+    vz_vars["hrot"] = tk.StringVar(value="plny")
+    radek_h = ttk.Frame(ram_t)
+    radek_h.pack(anchor="w")
+    ttk.Label(radek_h, text="Hrot šipky:").pack(side="left")
+    for hodn, text in (("plny", "plný ➤"), ("trojuhelnik", "trojúhelník ▶"), ("otevreny", "otevřený >")):
+        ttk.Radiobutton(radek_h, text=text, value=hodn, variable=vz_vars["hrot"]).pack(side="left", padx=4)
+
+    def spin(rodic, klic, popis, od, do, krok):
+        r_ = ttk.Frame(rodic)
+        r_.pack(fill="x", pady=1)
+        ttk.Label(r_, text=popis).pack(side="left")
+        vz_vars[klic] = tk.DoubleVar(value=VYCHOZI_VZHLED[klic])
+        ttk.Spinbox(r_, from_=od, to=do, increment=krok, textvariable=vz_vars[klic], width=6).pack(side="right")
+    spin(ram_t, "tloustka", "Tloušťka šipek (px):", 0.5, 4, 0.1)
+    spin(ram_t, "velikost_hrotu", "Velikost hrotu (px):", 5, 20, 1)
+    spin(ram_t, "polomer_rohu", "Zaoblení rohů šipek (0 = ostré):", 0, 30, 1)
+    spin(ram_t, "zaobleni_ramecku", "Zaoblení rámečků (0 = hranaté):", 0, 25, 1)
+
+    ram_v = ttk.LabelFrame(pravy, text="Velikosti", padding=8)
+    ram_v.pack(fill="x")
+    spin(ram_v, "delka_vazby", "Velikost struktur (délka vazby, px):", 12, 40, 1)
+    spin(ram_v, "velikost_atomu", "Písmo atomů (C, O, N …):", 0.3, 0.9, 0.05)
+    spin(ram_v, "pismo_nazvu", "Písmo názvů látek (pt):", 8, 24, 0.5)
+    spin(ram_v, "pismo_enzymu", "Písmo enzymů (pt):", 6, 18, 0.5)
+    spin(ram_v, "rozestup", "Rozestupy (× výchozí):", 0.6, 2.0, 0.1)
+
+    ram_f = ttk.LabelFrame(pravy, text="Písmo", padding=8)
+    ram_f.pack(fill="x", pady=6)
+    try:
+        from matplotlib import font_manager
+        fonty = sorted({f.name for f in font_manager.fontManager.ttflist})
+    except Exception:
+        fonty = ["DejaVu Sans"]
+    vz_vars["font"] = tk.StringVar(value=VYCHOZI_VZHLED["font"])
+    ttk.Combobox(ram_f, textvariable=vz_vars["font"], values=fonty, width=30).pack(anchor="w")
+
+    ram_b = ttk.Frame(pravy)
+    ram_b.pack(fill="x", pady=4)
+
+    def ziskej_vzhled():
+        v = {}
+        for k_, var in vz_vars.items():
+            try:
+                v[k_] = var.get()
+            except (tk.TclError, ValueError):
+                v[k_] = VYCHOZI_VZHLED[k_]
+        return v
+
+    def nastav_vzhled_gui(v):
+        for k_, var in vz_vars.items():
+            if k_ in v:
+                var.set(v[k_])
+                if k_ in vz_vzorky:
+                    vz_vzorky[k_].configure(background=v[k_])
+
+    def uloz_vzhled():
+        import json
+        with open(SOUBOR_VZHLEDU, "w", encoding="utf-8") as f_:
+            json.dump(ziskej_vzhled(), f_, ensure_ascii=False, indent=2)
+        var_stav.set(f"Vzhled uložen do {SOUBOR_VZHLEDU} – načte se při příštím spuštění.")
+
+    ttk.Button(ram_b, text="Uložit jako výchozí", command=uloz_vzhled).pack(side="left")
+    ttk.Button(ram_b, text="Obnovit původní", command=lambda: nastav_vzhled_gui(VYCHOZI_VZHLED)).pack(side="left", padx=4)
+    ttk.Button(ram_b, text="Náhled", command=lambda: nahled()).pack(side="left")
+    if os.path.exists(SOUBOR_VZHLEDU):
+        try:
+            nastav_vzhled_gui(nacti_vzhled_ze_souboru(SOUBOR_VZHLEDU))
+        except Exception:
+            pass
 
     # karta Náhled
     k_nah = ttk.Frame(karty, padding=4)
@@ -2793,16 +3044,6 @@ def spust_gui(pocatecni=None):
     var_coa = tk.BooleanVar(value=True)
     ttk.Checkbutton(volby, text="zkracovat koenzym A na „CoA“", variable=var_coa).pack(anchor="w", pady=1)
     ttk.Checkbutton(volby, text="otevřít SVG po vytvoření", variable=var_otevrit).pack(anchor="w", pady=1)
-    radek = ttk.Frame(volby)
-    radek.pack(anchor="w", fill="x", pady=(8, 2))
-    ttk.Label(radek, text="Velikost struktur (délka vazby, px):").pack(side="left")
-    var_vazba = tk.DoubleVar(value=DELKA_VAZBY)
-    ttk.Spinbox(radek, from_=12, to=40, increment=1, textvariable=var_vazba, width=5).pack(side="right")
-    radek = ttk.Frame(volby)
-    radek.pack(anchor="w", fill="x", pady=2)
-    ttk.Label(radek, text="Velikost písma atomů:").pack(side="left")
-    var_atomy = tk.DoubleVar(value=FONT_ATOMU)
-    ttk.Spinbox(radek, from_=0.3, to=0.9, increment=0.05, textvariable=var_atomy, width=5).pack(side="right")
     ttk.Label(volby, text="Vlastní nadpis (prázdné = podle dráhy):").pack(anchor="w", pady=(8, 0))
     var_nadpis = tk.StringVar()
     ttk.Entry(volby, textvariable=var_nadpis).pack(fill="x")
@@ -2942,7 +3183,7 @@ def spust_gui(pocatecni=None):
                     popisky=var_pop.get(), odkazy=var_odkazy.get(), geny=var_geny.get(),
                     zvyraznit=var_zvyr.get(), zkratky=var_zkr.get(),
                     glykany_atomy=var_glyk.get(), zkratit_coa=var_coa.get(),
-                    delka_vazby=var_vazba.get(), velikost_atomu=var_atomy.get(),
+                    vzhled=ziskej_vzhled(),
                     nadpis=var_nadpis.get(), rozlozeni=var_rozl.get())
 
     def meritko_nahledu(svg_text):
@@ -3091,6 +3332,9 @@ def main():
     ap.add_argument("--bez-genu", action="store_true", help="bez názvů genů u enzymů")
     ap.add_argument("--zvyraznit", action="store_true", help="enzymy organismu zeleně")
     ap.add_argument("--kruh", action="store_true", help="kruhové rozložení (cyklické dráhy)")
+    ap.add_argument("--predvolba", choices=list(PREDVOLBY), default=None, help="předvolba vzhledu")
+    ap.add_argument("--vzhled", default=None,
+                    help="soubor s nastavením vzhledu (JSON, např. nastaveni_vzhledu.json z okna)")
     ap.add_argument("--s-kofaktory", action="store_true",
                     help="kreslit i přenašeče (ThPP, lipoyllysin …) a meziprodukty vázané na enzym")
     ap.add_argument("--plne-coa", action="store_true", help="kreslit celý koenzym A (bez zkratky CoA)")
@@ -3125,12 +3369,20 @@ def main():
            if args.s_kofaktory or d.metabolity[c].get("role", "normal") == "normal"}
     met -= {x.strip() for x in args.vynechat.split(",") if x.strip()}
     vystup = args.vystup or os.path.join(SLOZKA, f"{d.org}{d.cislo}_draha.svg")
+    vzhled = dict(PREDVOLBY.get(args.predvolba, {})) if args.predvolba else {}
+    soubor_vz = args.vzhled or os.path.join(SLOZKA, "nastaveni_vzhledu.json")
+    if os.path.exists(soubor_vz) and not args.predvolba:
+        vzhled.update(nacti_vzhled_ze_souboru(soubor_vz))
+    if args.delka_vazby:
+        vzhled["delka_vazby"] = args.delka_vazby
+    if args.velikost_atomu:
+        vzhled["velikost_atomu"] = args.velikost_atomu
     n, kriz = vytvor_svg(d, met, rx, vystup, start=args.start, popisky=args.popisky,
                          odkazy=not args.bez_odkazu, geny=not args.bez_genu,
                          zvyraznit=args.zvyraznit, glykany_atomy=args.glykany_atomy,
                          zkratit_coa=not args.plne_coa, delka_vazby=args.delka_vazby,
                          velikost_atomu=args.velikost_atomu, nadpis=args.nadpis,
-                         rozlozeni="kruh" if args.kruh else "radky")
+                         rozlozeni="kruh" if args.kruh else "radky", vzhled=vzhled)
     print(f"Uloženo: {vystup}   ({n} uzlů, křížení šipek: {kriz})")
     for fmt in ("png", "pdf", "emf"):
         if getattr(args, fmt):
