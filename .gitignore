@@ -1,0 +1,20 @@
+# Mezipaměť dat stažených z KEGG (nesdílí se – licence KEGG)
+kegg_cache/
+
+# Vstupy a výstupy uživatele
+*.xml
+*.kgml
+*_draha.svg
+*_draha.pdf
+*_draha.png
+*_draha.emf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
