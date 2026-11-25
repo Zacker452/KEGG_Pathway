@@ -32,6 +32,10 @@ choosing which metabolites and reactions to draw; hidden intermediates are repla
   program cyklus sám najde a nakreslí ho po kružnici, ostatní větve vedou paprskovitě ven.
   Po načtení dráhy upozorní, že cyklus obsahuje.
 - **Náhled přímo v okně** se zvětšováním a posouváním, bez ukládání souboru.
+- **Přenašeče a enzymové komplexy:** thiamindifosfát, lipoyllysin, NAD apod. se ve výchozím
+  stavu nekreslí. Meziprodukty vázané na enzymový komplex (např. u pyruvátdehydrogenázy
+  a 2-oxoglutarátdehydrogenázy) se sloučí do jedné šipky se všemi enzymy komplexu,
+  jak je to zvykem v učebnicích. V okně je lze zapnout.
 - **Správný směr šipek:** nevratné reakce mají plný hrot (→), vratné dvojici polovičních (⇌).
   Reakce bez známého enzymu jsou čárkovaně.
 - **Enzymy:** u šipek jsou EC čísla a názvy genů organismu z KGML (např. kuře `gga`, člověk `hsa`).
@@ -109,6 +113,7 @@ python kegg_draha_svg.py --help                             # všechny volby
 | zvýraznit enzymy organismu zeleně | `--zvyraznit` | jako zelené boxy v KEGG |
 | šipky přes vynechané kroky | – | rámeček „⋯ vynechány N metabolity“ místo skrytých látek |
 | glykany jako atomové vzorce | `--glykany-atomy` | místo symbolů SNFG plná struktura |
+| přenašeče a vázané meziprodukty (karta Metabolity, ve výchozím stavu vypnuté) | `--s-kofaktory` | ThPP, lipoyllysin …; vypnuté = komplex jako jedna šipka |
 | zkracovat koenzym A na „CoA“ | `--plne-coa` (vypne) | celý CoA má 48 atomů, se zkratkou je struktura přehlednější |
 | Velikost struktur | `--delka-vazby 20` | délka vazby v px (12–40) |
 | Velikost písma atomů | `--velikost-atomu 0.5` | relativní velikost symbolů C, O, N … |
@@ -134,7 +139,8 @@ Další konstanty vzhledu (barvy, mezery, písmo, poloměr rohů šipek) jsou na
 
 **Na co si dát pozor**
 
-- Kruhové rozložení bere nejdelší cyklus ve vybrané části dráhy. Pokud chceš jiný cyklus,
+- Kruhové rozložení bere nejdelší cyklus ve vybrané části dráhy (přenašeče se do něj
+  nepočítají). Pokud chceš jiný cyklus,
   vypni látky, které do něj nepatří (nahradí je rámeček „vynechané kroky“).
 - Látky bez struktury v KEGG (protein, akceptor, polymery) mají jen rámeček s názvem.
 - Uzlové metabolity (pyruvát, acetyl-CoA), které KEGG kreslí na více místech, jsou v obrázku
