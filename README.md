@@ -11,6 +11,24 @@ Celá mapa: [priklady/gga00360_fenylalanin.svg](priklady/gga00360_fenylalanin.sv
 s vynechanými kroky: [priklady/gga00360_vynechane_kroky.svg](priklady/gga00360_vynechane_kroky.svg) ·
 [náhled celé mapy (PNG)](docs/ukazka_celkem.png)
 
+## Rychlý start (Windows, bez instalace)
+
+1. **Stáhni program:** [**KEGG_Pathway.exe** – nejnovější verze](https://github.com/Zacker452/KEGG_Pathway/releases/latest)
+   (v části *Assets* klikni na `KEGG_Pathway.exe`).
+2. **Spusť ho dvojklikem.** Windows může ukázat modré okno „Systém Windows ochránil váš počítač“
+   (program není digitálně podepsaný) – klikni na *Další informace → Přesto spustit*.
+   První spuštění trvá 10–20 s.
+3. **Stáhni dráhu z KEGG:** otevři např. <https://www.kegg.jp/pathway/hsa00360>
+   (místo `hsa00360` napiš svůj organismus a číslo dráhy) a klikni na **Download KGML**.
+4. V programu klikni na **Otevřít…**, vyber stažený `.xml` soubor a pak **Načíst**.
+5. Na kartách *Metabolity* a *Reakce* odškrtni, co nechceš. Vpravo zvol rozložení
+   (výchozí je **podle mapy KEGG**), klikni na **Náhled** a nakonec **Vytvořit SVG…**.
+
+Hotové SVG otevřeš v prohlížeči, v Inkscapu, Illustratoru, Corelu nebo ho vložíš do Wordu/PowerPointu.
+Podrobnosti jsou níže.
+
+![Rozložení podle mapy KEGG: metabolismus fenylalaninu](docs/ukazka_mapa.png)
+
 *English summary: draws any KEGG metabolic pathway (KGML file) as a clean, fully vector SVG
 with chemical structures (RDKit), glycan SNFG symbols, orthogonal non-crossing arrows,
 EC numbers / organism genes and links to neighbouring pathways. Includes a Tkinter GUI for
@@ -64,7 +82,7 @@ choosing which metabolites and reactions to draw; hidden intermediates are repla
 
 Hotová aplikace `KEGG_Pathway.exe` se sestavuje automaticky (GitHub Actions):
 
-- **Vydání (Releases)** – vpravo na stránce repozitáře → *Releases* → stáhni `KEGG_Pathway.exe`.
+- **Vydání (Releases)** – [stránka s nejnovější verzí](https://github.com/Zacker452/KEGG_Pathway/releases/latest) → *Assets* → `KEGG_Pathway.exe`.
 - **Nejnovější verze** – záložka *Actions* → poslední úspěšný běh „Sestavit Windows .exe“ →
   dole *Artifacts* → `KEGG_Pathway-windows` (zip s .exe; vyžaduje přihlášení na GitHub).
 
