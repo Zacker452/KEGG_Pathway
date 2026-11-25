@@ -28,7 +28,10 @@ choosing which metabolites and reactions to draw; hidden intermediates are repla
   nebo volitelně jako plné atomové vzorce.
 - **Rozložení bez křížení:** vrstvový (Sugiyamův) algoritmus s minimalizací křížení,
   pravoúhlé šipky, každá s vlastní svislou „kolejí“, a popisky enzymů s kontrolou kolizí.
-- **Tři rozložení:**
+- **Čtyři rozložení:**
+  - *podle mapy KEGG* (výchozí) – látky jsou rozmístěné jako na obrázku mapy na stránkách
+    KEGG (souřadnice z KGML); rozestupy se zvětší jen tam, kde se struktury nevejdou,
+    šipky se vedou pravoúhle mimo látky s co nejmenším počtem křížení,
   - *řádkové* – zleva doprava,
   - *kompaktní* – dlouhá dráha se zalomí do více pásů (jako text na řádky), aby obrázek
     vyšel blízko čtverci; šipky přes zalomení vedou vlastními koridory bez křížení,
@@ -129,7 +132,7 @@ python kegg_draha_svg.py --help                             # všechny volby
 |---|---|---|
 | Výchozí metabolit | `--start C00079` | látka úplně vlevo, od ní se dráha rozkládá |
 | Název pod / vedle struktury | `--popisky pod\|vpravo` | umístění názvu metabolitu |
-| Rozložení: řádkové / kompaktní / kruhové | `--kompaktni`, `--kruh` | kompaktní = zalomení do pásů blízko čtverci |
+| Rozložení: podle mapy KEGG / řádkové / kompaktní / kruhové | (výchozí), `--radky`, `--kompaktni`, `--kruh` | kompaktní = zalomení do pásů blízko čtverci |
 | cyklus jako kruh (řádkové / kompaktní) | `--cyklus-kruh` | cyklus jako kruh, zbytek dráhy v řádcích |
 | Cyklus: (výběr z nalezených cyklů) | `--cyklus C00036,C00158,…` | který cyklus má být kruhem (jinak nejdelší) |
 | navazující dráhy | `--bez-odkazu` | rámečky s odkazy na další dráhy KEGG |
